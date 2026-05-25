@@ -1,0 +1,131 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "edge-proc"
+version = "0.1.0"
+description = "AI-native local execution substrate: a pure deterministic router over pluggable runtimes, a FAISS vector runtime, and a signed-free bundle/sync substrate. The foundational local-execution Lego."
+readme = "README.md"
+requires-python = ">=3.13"
+license = { text = "MIT" }
+authors = [{ name = "Harish Seshadri", email = "harish.seshadri@gmail.com" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "pydantic>=2.9",
+    "typer>=0.15",
+    "shared-libs-python>=0.1.1",
+]
+
+[project.optional-dependencies]
+localvec = [
+    "faiss-cpu>=1.9",
+    "sentence-transformers>=3.3",
+    "rank-bm25>=0.2",
+    "numpy>=2.0",
+]
+bundles = [
+    "httpx>=0.27",
+    "structlog>=24.4",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "mypy>=1.11",
+    "ruff>=0.6",
+    "xenon>=0.9",
+    "radon>=6.0",
+    "poethepoet>=0.30",
+]
+
+[project.scripts]
+edgeproc = "edgeproc.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/hseshadr/edgeproc"
+Repository = "https://github.com/hseshadr/edgeproc"
+Issues = "https://github.com/hseshadr/edgeproc/issues"
+
+[tool.uv.sources]
+# Local editable for development; published consumers resolve the version pin above.
+shared-libs-python = { path = "../shared-libs-python", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["edgeproc"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+exclude = [".git", "__pycache__", "build", "dist", ".venv", "venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "C901", "B", "UP", "SIM", "N", "RUF", "ASYNC", "S", "PL", "A", "PT"]
+ignore = ["S101", "PLR0913"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "PLR2004", "C901", "PLR0911", "PLR0912"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 5
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = ["faiss", "rank_bm25", "sentence_transformers"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "8.3"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+asyncio_mode = "auto"
+addopts = [
+    "--strict-markers",
+    "--cov=edgeproc",
+    "--cov-report=term-missing",
+    "--cov-fail-under=90",
+    "-v",
+]
+
+[tool.coverage.run]
+source = ["edgeproc"]
+omit = ["*/tests/*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+    "\\.\\.\\.",
+]
+fail_under = 90.0
+
+[tool.poe.tasks]
+lint = "ruff check edgeproc/ tests/"
+fmt-check = "ruff format --check edgeproc/ tests/"
+fmt = "ruff format edgeproc/ tests/"
+typecheck = "mypy --strict edgeproc/"
+complexity = "xenon --max-absolute A --max-modules A --max-average A edgeproc/"
+test = "pytest"
+# `gate` mirrors CI exactly (lint + format-check + typecheck + complexity + test).
+gate = ["lint", "fmt-check", "typecheck", "complexity", "test"]
