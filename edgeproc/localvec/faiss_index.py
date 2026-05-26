@@ -15,16 +15,31 @@ strategies — the whole point of building EdgeProc on top of lego #1.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import faiss
 import numpy as np
 from numpy.typing import NDArray
+from pydantic import BaseModel
 from shared_libs_python.vector_mgmt.core.types import (
     IndexConfig,
     IndexStats,
     Metadata,
+    Scalar,
     VectorEmbedding,
 )
+
+_INDEX_FILE = "index.faiss"
+_STATE_FILE = "state.json"
+
+
+class _PersistedState(BaseModel):
+    """On-disk sidecar for a saved index (the FAISS vectors live in ``index.faiss``)."""
+
+    config: IndexConfig
+    faiss_ids: list[str]
+    tombstoned: list[str]
+    meta: dict[str, dict[str, Scalar]]
 
 
 class FaissVectorIndex:
@@ -33,11 +48,45 @@ class FaissVectorIndex:
     def __init__(self, index_name: str, config: IndexConfig | None = None) -> None:
         self.index_name = index_name
         self.config = config or IndexConfig()
-        self._faiss = faiss.IndexFlatIP(self.config.dimension)
+        self._faiss: faiss.Index = faiss.IndexFlatIP(self.config.dimension)
         self._faiss_ids: list[str] = []
         self._live: dict[str, NDArray[np.float32]] = {}
         self._meta: dict[str, Metadata] = {}
         self._tombstoned: set[str] = set()
+
+    def save(self, directory: Path) -> None:
+        """Persist the FAISS index plus its id map, tombstones, and metadata."""
+        directory.mkdir(parents=True, exist_ok=True)
+        faiss.write_index(self._faiss, str(directory / _INDEX_FILE))
+        state = _PersistedState(
+            config=self.config,
+            faiss_ids=self._faiss_ids,
+            tombstoned=sorted(self._tombstoned),
+            meta={entity_id: dict(meta) for entity_id, meta in self._meta.items()},
+        )
+        (directory / _STATE_FILE).write_text(state.model_dump_json())
+
+    @classmethod
+    def load(cls, index_name: str, directory: Path) -> FaissVectorIndex:
+        """Reload an index previously written by :meth:`save`."""
+        state = _PersistedState.model_validate_json((directory / _STATE_FILE).read_text())
+        instance = cls(index_name, state.config)
+        instance._restore(faiss.read_index(str(directory / _INDEX_FILE)), state)
+        return instance
+
+    def _restore(self, faiss_index: faiss.Index, state: _PersistedState) -> None:
+        self._faiss = faiss_index
+        self._faiss_ids = list(state.faiss_ids)
+        self._tombstoned = set(state.tombstoned)
+        self._meta = {entity_id: meta for entity_id, meta in state.meta.items()}
+        self._live = self._reconstruct_live()
+
+    def _reconstruct_live(self) -> dict[str, NDArray[np.float32]]:
+        live: dict[str, NDArray[np.float32]] = {}
+        for row, entity_id in enumerate(self._faiss_ids):
+            if entity_id not in self._tombstoned:
+                live[entity_id] = np.asarray(self._faiss.reconstruct(row), dtype=np.float32)
+        return live
 
     async def insert(self, embeddings: list[VectorEmbedding]) -> None:
         await asyncio.to_thread(self._insert_sync, embeddings)

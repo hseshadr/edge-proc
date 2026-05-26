@@ -5,6 +5,8 @@ Vectors are dim-4 and axis-aligned so inner-product ranking is hand-verifiable.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from shared_libs_python.vector_mgmt.core.types import (
     IndexConfig,
@@ -115,3 +117,54 @@ async def test_metadata_filter_restricts_results() -> None:
     )
     results = await idx.search([1.0, 0.0, 0.0, 0.0], k=5, filters={"brand": "acme"})
     assert {doc for doc, _ in results} == {"a"}
+
+
+async def test_save_and_load_round_trips_search(tmp_path: Path) -> None:
+    idx = _index()
+    await idx.insert(
+        [
+            _emb("a", [1.0, 0.0, 0.0, 0.0]),
+            _emb("b", [0.0, 1.0, 0.0, 0.0]),
+            _emb("c", [0.9, 0.1, 0.0, 0.0]),
+        ]
+    )
+    idx.save(tmp_path / "vec")
+    loaded = FaissVectorIndex.load("products", tmp_path / "vec")
+    assert loaded.config.dimension == 4
+    assert [doc for doc, _ in await loaded.search([1.0, 0.0, 0.0, 0.0], k=3)] == ["a", "c", "b"]
+
+
+async def test_load_preserves_tombstones(tmp_path: Path) -> None:
+    idx = _index()
+    await idx.insert([_emb("a", [1.0, 0.0, 0.0, 0.0]), _emb("b", [0.0, 1.0, 0.0, 0.0])])
+    await idx.delete(["a"])
+    idx.save(tmp_path / "vec")
+    loaded = FaissVectorIndex.load("products", tmp_path / "vec")
+    stats = await loaded.get_stats()
+    assert stats.vector_count == 1
+    assert stats.tombstone_count == 1
+    assert "a" not in {doc for doc, _ in await loaded.search([1.0, 0.0, 0.0, 0.0], k=5)}
+
+
+async def test_load_preserves_metadata_for_filtering(tmp_path: Path) -> None:
+    idx = _index()
+    await idx.insert(
+        [
+            _emb("a", [1.0, 0.0, 0.0, 0.0], brand="acme"),
+            _emb("b", [0.9, 0.1, 0.0, 0.0], brand="other"),
+        ]
+    )
+    idx.save(tmp_path / "vec")
+    loaded = FaissVectorIndex.load("products", tmp_path / "vec")
+    results = await loaded.search([1.0, 0.0, 0.0, 0.0], k=5, filters={"brand": "acme"})
+    assert {doc for doc, _ in results} == {"a"}
+
+
+async def test_loaded_index_supports_further_rebuild(tmp_path: Path) -> None:
+    idx = _index()
+    await idx.insert([_emb("a", [1.0, 0.0, 0.0, 0.0]), _emb("b", [0.0, 1.0, 0.0, 0.0])])
+    await idx.delete(["a"])
+    idx.save(tmp_path / "vec")
+    loaded = FaissVectorIndex.load("products", tmp_path / "vec")
+    await loaded.rebuild()
+    assert (await loaded.get_stats()).tombstone_count == 0
