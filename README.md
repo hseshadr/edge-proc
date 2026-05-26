@@ -33,22 +33,77 @@ pip install edge-proc[localvec,bundles]  # full local substrate
 
 ## Quickstart
 
+In v0 you **register runtimes explicitly** — `EdgeProc.local_default()` gives you a
+deterministic router over an *empty* registry (auto-probing installed kernels is
+roadmap). So the real workflow is: build a `LocalVecRuntime`, register it, then
+route a task. This semantic-search demo runs end to end:
+
+> Needs `pip install edge-proc[localvec]`. First run downloads the
+> `all-MiniLM-L6-v2` model (~90 MB); it is cached after that.
+
 ```python
 import asyncio
-from edgeproc import EdgeProc, Task, TaskKind, PrivacyMode
+
+from shared_libs_python.vector_mgmt.core.types import IndexConfig, VectorEmbedding
+
+from edgeproc import EdgeProc, PrivacyMode, Task, TaskKind
+from edgeproc.core.registry import RuntimeRegistry
+from edgeproc.localvec.encoder import TextEncoder
+from edgeproc.localvec.faiss_index import FaissVectorIndex
+from edgeproc.localvec.runtime import LocalVecRuntime
+from edgeproc.localvec.searcher import KeywordSearcher
+
+CATALOG = {
+    "p1": "red running shoes",
+    "p2": "waterproof hiking boots",
+    "p3": "blue denim jacket",
+    "p4": "trail running sneakers",
+}
+
 
 async def main() -> None:
-    ep = EdgeProc.local_default()                 # registers whichever runtimes are installed
-    task = Task(
-        kind=TaskKind.EMBED,
-        payload={"texts": ["red running shoes", "waterproof hiking boots"]},
-        privacy_mode=PrivacyMode.LOCAL_ONLY,
+    ids, texts = list(CATALOG), list(CATALOG.values())
+
+    # 1. Build a local vector runtime: an encoder, a FAISS index, and a BM25 searcher.
+    encoder = TextEncoder()
+    index = FaissVectorIndex("catalog", IndexConfig(dimension=encoder.dim))
+    await index.insert(
+        [
+            VectorEmbedding(entity_id=i, embedding=v.tolist())
+            for i, v in zip(ids, encoder.encode_texts(texts), strict=True)
+        ]
     )
-    result = await ep.run(task)
-    print(result.success, result.runtime_used, result.latency_ms)
+    runtime = LocalVecRuntime(encoder, index, KeywordSearcher.from_texts(texts, ids))
+
+    # 2. Register it, then hand EdgeProc a Task. The pure router picks the runtime.
+    registry = RuntimeRegistry()
+    registry.register(runtime)
+    ep = EdgeProc(registry=registry)
+
+    result = await ep.run(
+        Task(
+            kind=TaskKind.SEARCH,
+            payload={"query": "shoes for running", "k": 3},
+            privacy_mode=PrivacyMode.LOCAL_ONLY,
+        )
+    )
+    print(result.success, result.runtime_used, f"{result.latency_ms:.1f}ms")
+    for entity_id, distance in result.payload["results"]:
+        print(f"  {entity_id}  {CATALOG[entity_id]:<24} distance={distance:.3f}")
+
 
 asyncio.run(main())
 ```
+
+```text
+True localvec 31.2ms
+  p1  red running shoes        distance=0.219
+  p4  trail running sneakers   distance=0.246
+  p2  waterproof hiking boots  distance=0.556
+```
+
+Swap `TaskKind.SEARCH` for `TaskKind.EMBED` with `payload={"texts": [...]}` to get
+raw vectors back, or `TaskKind.RANK` for hybrid BM25 + vector fusion.
 
 ## Architecture (v0)
 
