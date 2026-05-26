@@ -11,10 +11,11 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from typing import Final
 
 from pydantic import BaseModel, Field
 
-_SHA256_PREFIX = "sha256:"
+_SHA256_PREFIX: Final[str] = "sha256:"
 
 
 class BundleFile(BaseModel):

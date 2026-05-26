@@ -14,7 +14,7 @@ the runtime boundary.
 from __future__ import annotations
 
 from time import perf_counter
-from typing import cast
+from typing import Final, cast
 
 from shared_libs_python.vector_mgmt.core.types import VectorIndex
 
@@ -28,12 +28,12 @@ from edgeproc.core.models import (
     Task,
     TaskKind,
 )
+from edgeproc.core.settings import EdgeProcSettings
 from edgeproc.localvec.encoder import Encoder
 from edgeproc.localvec.fusion import reciprocal_rank_fusion
 from edgeproc.localvec.searcher import KeywordSearcher
 
-_SUPPORTED = frozenset({TaskKind.EMBED, TaskKind.SEARCH, TaskKind.RANK})
-_DEFAULT_K = 10
+_SUPPORTED: Final[frozenset[TaskKind]] = frozenset({TaskKind.EMBED, TaskKind.SEARCH, TaskKind.RANK})
 
 
 class LocalVecRuntime:
@@ -50,6 +50,7 @@ class LocalVecRuntime:
         self._encoder = encoder
         self._index = index
         self._keyword = keyword
+        self._default_k = EdgeProcSettings().default_k
 
     def can_handle(self, task: Task) -> CapabilityVerdict:
         if task.privacy_mode != PrivacyMode.LOCAL_ONLY:
@@ -80,14 +81,14 @@ class LocalVecRuntime:
 
     async def _search(self, task: Task) -> dict[str, JsonValue]:
         query = self._encoder.encode_query(_require_query(task)).tolist()
-        hits = await self._index.search(query, _require_k(task))
+        hits = await self._index.search(query, _require_k(task, self._default_k))
         return {"results": _as_rows(hits)}
 
     async def _rank(self, task: Task) -> dict[str, JsonValue]:
         if self._keyword is None:
             raise ValueError("RANK requires a keyword searcher")
         text = _require_query(task)
-        k = _require_k(task)
+        k = _require_k(task, self._default_k)
         keyword_hits = self._keyword.search(text, k=k)
         vector_hits = await self._index.search(self._encoder.encode_query(text).tolist(), k)
         return {"results": _as_rows(reciprocal_rank_fusion(keyword_hits, vector_hits)[:k])}
@@ -133,8 +134,8 @@ def _require_query(task: Task) -> str:
     return query
 
 
-def _require_k(task: Task) -> int:
-    k = task.payload.get("k", _DEFAULT_K)
+def _require_k(task: Task, default: int) -> int:
+    k = task.payload.get("k", default)
     if not isinstance(k, int):
         raise ValueError("payload.k must be an int")
     return k

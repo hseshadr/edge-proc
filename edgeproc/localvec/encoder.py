@@ -13,7 +13,7 @@ import numpy as np
 from numpy.typing import NDArray
 from sentence_transformers import SentenceTransformer
 
-_DEFAULT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+from edgeproc.core.settings import EdgeProcSettings
 
 
 @runtime_checkable
@@ -31,8 +31,11 @@ class Encoder(Protocol):
 class TextEncoder:
     """sentence-transformers encoder producing normalized float32 vectors."""
 
-    def __init__(self, model_name: str = _DEFAULT_MODEL) -> None:
-        self._model = SentenceTransformer(model_name)
+    def __init__(self, model_name: str | None = None, token: str | None = None) -> None:
+        settings = EdgeProcSettings()
+        self._model = SentenceTransformer(
+            model_name or settings.model_name, token=token or settings.hf_token
+        )
 
     @property
     def dim(self) -> int:

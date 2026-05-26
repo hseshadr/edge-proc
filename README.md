@@ -105,6 +105,71 @@ True localvec 31.2ms
 Swap `TaskKind.SEARCH` for `TaskKind.EMBED` with `payload={"texts": [...]}` to get
 raw vectors back, or `TaskKind.RANK` for hybrid BM25 + vector fusion.
 
+### …or from the CLI: `route`
+
+Prefer the shell? Persist an index once, drop your `Task` in a JSON file, and
+`route` it — the CLI loads the saved index into a `LocalVecRuntime`, registers it,
+runs the task, and prints the `ResultEnvelope`. The exit code mirrors `success`
+(`0` ok, `1` otherwise — including `no_runtime_accepted`), so scripts can branch on it.
+
+First persist the catalog (a saved index is the FAISS file plus a small `state.json`):
+
+```python
+# save_index.py
+import asyncio
+from pathlib import Path
+
+from shared_libs_python.vector_mgmt.core.types import IndexConfig, VectorEmbedding
+
+from edgeproc.localvec.encoder import TextEncoder
+from edgeproc.localvec.faiss_index import FaissVectorIndex
+
+CATALOG = {
+    "p1": "red running shoes",
+    "p2": "waterproof hiking boots",
+    "p3": "blue denim jacket",
+    "p4": "trail running sneakers",
+}
+
+
+async def main() -> None:
+    ids, texts = list(CATALOG), list(CATALOG.values())
+    encoder = TextEncoder()
+    index = FaissVectorIndex("catalog_idx", IndexConfig(dimension=encoder.dim))
+    await index.insert(
+        [
+            VectorEmbedding(entity_id=i, embedding=v.tolist())
+            for i, v in zip(ids, encoder.encode_texts(texts), strict=True)
+        ]
+    )
+    index.save(Path("catalog_idx"))
+
+
+asyncio.run(main())
+```
+
+Then route a task against it:
+
+```bash
+python save_index.py
+
+cat > task.json <<'JSON'
+{"kind": "search", "payload": {"query": "shoes for running", "k": 3}, "privacy_mode": "local_only"}
+JSON
+
+edgeproc route --index-dir catalog_idx --task task.json --pretty
+```
+
+```text
+success=True runtime=localvec latency=82.7ms
+  p1  0.219
+  p4  0.246
+  p2  0.556
+```
+
+Drop `--pretty` for the full `ResultEnvelope` as JSON. A missing index or an
+unroutable task fails closed: non-zero exit and a message on stderr.
+
 ## Architecture (v0)
 
 ```

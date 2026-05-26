@@ -12,3 +12,4 @@ coverage.json
 .ruff_cache/
 .mypy_cache/
 .DS_Store
+.env

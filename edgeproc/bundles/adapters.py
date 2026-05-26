@@ -9,15 +9,15 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Final, Protocol, runtime_checkable
 from urllib.parse import urljoin
 
 import httpx
 
 from edgeproc.bundles.manifest import BundleManifest
+from edgeproc.core.settings import EdgeProcSettings
 
-_CHUNK = 8192
-_DEFAULT_TIMEOUT = 30.0
+_CHUNK: Final[int] = 8192
 
 
 @runtime_checkable
@@ -45,9 +45,9 @@ class HttpAdapter:
     """Streams bundles from an HTTP/CDN origin."""
 
     def __init__(
-        self, timeout: float = _DEFAULT_TIMEOUT, transport: httpx.BaseTransport | None = None
+        self, timeout: float | None = None, transport: httpx.BaseTransport | None = None
     ) -> None:
-        self._timeout = timeout
+        self._timeout = timeout if timeout is not None else EdgeProcSettings().http_timeout
         self._transport = transport
 
     def fetch_manifest(self, source: str) -> BundleManifest:

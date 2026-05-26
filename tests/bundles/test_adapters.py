@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import httpx
+import pytest
 
 from edgeproc.bundles.adapters import FetchAdapter, FilesystemAdapter, HttpAdapter
 
@@ -53,3 +54,9 @@ def test_http_adapter_fetches_manifest_and_streams_file(tmp_path: Path) -> None:
     dest = tmp_path / "index.faiss"
     adapter.fetch_file("https://cdn.example/bundle/", "index.faiss", dest)
     assert dest.read_bytes() == b"FAISSDATA"
+
+
+def test_http_adapter_default_timeout_honors_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EDGEPROC_HTTP_TIMEOUT", "7.0")
+    adapter = HttpAdapter()
+    assert adapter._timeout == 7.0

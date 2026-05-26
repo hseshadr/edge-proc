@@ -21,6 +21,7 @@ classifiers = [
 
 dependencies = [
     "pydantic>=2.9",
+    "pydantic-settings>=2.5",
     "typer>=0.15",
     "shared-libs-python>=0.1.1",
 ]

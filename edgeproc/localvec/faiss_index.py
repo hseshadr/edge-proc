@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Final
 
 import faiss
 import numpy as np
@@ -29,8 +30,8 @@ from shared_libs_python.vector_mgmt.core.types import (
     VectorEmbedding,
 )
 
-_INDEX_FILE = "index.faiss"
-_STATE_FILE = "state.json"
+_INDEX_FILE: Final[str] = "index.faiss"
+_STATE_FILE: Final[str] = "state.json"
 
 
 class _PersistedState(BaseModel):

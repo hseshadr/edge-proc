@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from shared_libs_python.vector_mgmt.core.types import IndexConfig, VectorEmbedding
 
 from edgeproc.core.models import CapabilityVerdict, PrivacyMode, Task, TaskKind
@@ -105,3 +106,11 @@ async def test_non_int_k_fails_closed() -> None:
     result = await runtime.execute(_task(TaskKind.SEARCH, query="red shoes", k="lots"))
     assert result.success is False
     assert "k" in (result.error or "")
+
+
+async def test_default_k_honors_env_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EDGEPROC_DEFAULT_K", "1")
+    runtime = await _populated_runtime()
+    result = await runtime.execute(_task(TaskKind.SEARCH, query="red shoes"))
+    assert result.success is True
+    assert len(result.payload["results"]) <= 1

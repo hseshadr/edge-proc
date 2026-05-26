@@ -7,6 +7,7 @@ Fails closed: a checksum mismatch raises rather than caching corrupt bytes.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Final
 
 import structlog
 
@@ -14,6 +15,8 @@ from edgeproc.bundles.adapters import FetchAdapter
 from edgeproc.bundles.manifest import BundleFile, BundleManifest, validate_checksum
 
 log = structlog.get_logger(__name__)
+
+_MANIFEST_FILE: Final[str] = "manifest.json"
 
 
 def sync_bundle(
@@ -29,7 +32,7 @@ def sync_bundle(
     manifest = adapter.fetch_manifest(manifest_url)
     for entry in manifest.files:
         _fetch_and_verify(adapter, file_base_url, entry, cache_dir)
-    (cache_dir / "manifest.json").write_text(manifest.model_dump_json(indent=2))
+    (cache_dir / _MANIFEST_FILE).write_text(manifest.model_dump_json(indent=2))
     log.info("sync complete", bundle_id=manifest.bundle_id, version=manifest.version)
     return manifest
 

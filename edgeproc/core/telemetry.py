@@ -7,10 +7,11 @@
 from __future__ import annotations
 
 from collections import deque
+from typing import Final
 
 from edgeproc.core.models import ResultEnvelope
 
-DEFAULT_MAXLEN = 10_000
+DEFAULT_MAXLEN: Final[int] = 10_000
 
 
 class NullSink:
