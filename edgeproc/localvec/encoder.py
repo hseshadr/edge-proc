@@ -28,6 +28,16 @@ class Encoder(Protocol):
     def encode_query(self, query: str) -> NDArray[np.float32]: ...
 
 
+class _HasEmbeddingDimension(Protocol):
+    """Structural view of the SentenceTransformer embedding-dimension accessor.
+
+    sentence-transformers 5.x ships ``get_embedding_dimension`` at runtime but
+    omits it from its type stubs, so this Protocol restores the real signature.
+    """
+
+    def get_embedding_dimension(self) -> int | None: ...
+
+
 class TextEncoder:
     """sentence-transformers encoder producing normalized float32 vectors."""
 
@@ -39,7 +49,15 @@ class TextEncoder:
 
     @property
     def dim(self) -> int:
-        return int(self._model.get_embedding_dimension())
+        # sentence-transformers 5.x renamed get_sentence_embedding_dimension ->
+        # get_embedding_dimension, but the new name is not yet in its type stubs, so
+        # mypy resolves the attribute through nn.Module.__getattr__ to Tensor | Module.
+        # Cast the model to a narrow structural type that declares the real method.
+        model = cast("_HasEmbeddingDimension", self._model)
+        embedding_dim = model.get_embedding_dimension()
+        if embedding_dim is None:
+            raise RuntimeError("SentenceTransformer model exposes no embedding dimension")
+        return embedding_dim
 
     def encode_texts(self, texts: list[str]) -> NDArray[np.float32]:
         embeddings = self._model.encode(texts, convert_to_numpy=True, normalize_embeddings=True)

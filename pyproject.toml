@@ -125,8 +125,13 @@ fail_under = 90.0
 lint = "ruff check edgeproc/ tests/"
 fmt-check = "ruff format --check edgeproc/ tests/"
 fmt = "ruff format edgeproc/ tests/"
-typecheck = "mypy --strict edgeproc/"
 complexity = "xenon --max-absolute A --max-modules A --max-average A edgeproc/"
 test = "pytest"
 # `gate` mirrors CI exactly (lint + format-check + typecheck + complexity + test).
 gate = ["lint", "fmt-check", "typecheck", "complexity", "test"]
+
+# shared-libs-python is installed editable via a path-only .pth entry that mypy
+# does not read, so resolve the sibling's source root and put it on MYPYPATH.
+# Works in both layouts: local (../shared-libs-python) and CI (.deps/...).
+[tool.poe.tasks.typecheck]
+shell = 'MYPYPATH=$(python -c "import os, shared_libs_python as s; print(os.path.dirname(os.path.dirname(s.__file__)))") mypy --strict edgeproc/'
