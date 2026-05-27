@@ -68,7 +68,7 @@ packages = ["edgeproc"]
 [tool.ruff]
 target-version = "py313"
 line-length = 100
-exclude = [".git", "__pycache__", "build", "dist", ".venv", "venv"]
+exclude = [".git", "__pycache__", "build", "dist", ".venv", "venv", ".deps"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "C901", "B", "UP", "SIM", "N", "RUF", "ASYNC", "S", "PL", "A", "PT"]

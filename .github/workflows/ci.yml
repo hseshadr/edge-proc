@@ -2,43 +2,67 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [master]
   pull_request:
-    branches: [main, develop]
 
 jobs:
   gate:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.13"]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      # edgeproc depends on shared-libs-python via a local path source
+      # (../shared-libs-python). Check the sibling out INSIDE the workspace (.deps/)
+      # so actions/checkout path restrictions are satisfied, then patch the uv path
+      # source to point there before `uv sync`. Local dev is unaffected (pyproject is
+      # patched only on the runner; .deps/ is gitignored so CI never commits it).
+      #
+      # REQUIRED: a repo secret PORTFOLIO_PAT — a PAT with Contents:read on
+      # hseshadr/shared-libs-python. The default GITHUB_TOKEN cannot read other
+      # private repos. Settings -> Secrets and variables -> Actions -> New secret.
+      - name: Checkout shared-libs-python (private sibling)
+        uses: actions/checkout@v4
         with:
-          python-version: ${{ matrix.python-version }}
+          repository: hseshadr/shared-libs-python
+          token: ${{ secrets.PORTFOLIO_PAT }}
+          path: .deps/shared-libs-python
+
+      - name: Patch uv path source for CI layout
+        # pyproject.toml has: shared-libs-python = { path = "../shared-libs-python", ... }
+        # In CI the sibling lives at .deps/shared-libs-python (inside $GITHUB_WORKSPACE).
+        run: |
+          python3 - <<'PYEOF'
+          import re, pathlib
+          p = pathlib.Path("pyproject.toml")
+          txt = p.read_text()
+          txt = re.sub(
+              r'(shared-libs-python\s*=\s*\{[^}]*path\s*=\s*")[^"]*(")',
+              r'\g<1>.deps/shared-libs-python\g<2>',
+              txt,
+          )
+          p.write_text(txt)
+          print("Patched: shared-libs-python path -> .deps/shared-libs-python")
+          PYEOF
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
         with:
           version: "latest"
+      - name: Pin Python
+        run: uv python install 3.13
 
+      # --frozen omitted: the patch changes the path source, so the lock no longer
+      # matches; a plain sync re-resolves against the patched pyproject.
       - name: Install dependencies (core + extras + dev)
         run: uv sync --all-extras
 
       - name: Lint
         run: uv run ruff check edgeproc/ tests/
-
       - name: Format check
         run: uv run ruff format --check edgeproc/ tests/
-
       - name: Type check
         run: uv run mypy --strict edgeproc/
-
       - name: Complexity (Radon Grade A)
         run: uv run xenon --max-absolute A --max-modules A --max-average A edgeproc/
-
       - name: Tests with coverage
         run: uv run pytest --cov=edgeproc --cov-report=term-missing --cov-fail-under=90

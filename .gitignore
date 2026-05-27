@@ -13,3 +13,4 @@ coverage.json
 .mypy_cache/
 .DS_Store
 .env
+.deps/
