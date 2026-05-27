@@ -70,11 +70,17 @@ class FilesystemCacheStore:
     """Filesystem ``CacheStore``: ``chunks/<aa>/<hash>``, ``manifests/<hash>``, ``active``."""
 
     def __init__(self, root: Path) -> None:
+        self._root = root
         self._chunks = root / "chunks"
         self._manifests = root / "manifests"
         self._active = root / "active"
         self._chunks.mkdir(parents=True, exist_ok=True)
         self._manifests.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def root(self) -> Path:
+        """The store's root dir — also the origin dir a producer lays ``latest`` into."""
+        return self._root
 
     def _chunk_path(self, chunk_hash: str) -> Path:
         return self._chunks / chunk_hash[:2] / chunk_hash

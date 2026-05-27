@@ -25,7 +25,8 @@ from edgeproc.core.registry import RuntimeRegistry
 if TYPE_CHECKING:
     from edgeproc.bundles.adapters import FetchAdapter
     from edgeproc.bundles.cas import CacheStore
-    from edgeproc.bundles.signing import Verifier
+    from edgeproc.bundles.manifest import VersionPointer
+    from edgeproc.bundles.signing import Ed25519Signer, Signer, Verifier
     from edgeproc.bundles.sync import SyncResult
     from edgeproc.core.protocols import Runtime
     from edgeproc.localvec.encoder import Encoder
@@ -105,6 +106,55 @@ def sync(
     adapter = HttpAdapter() if http else FilesystemAdapter()
     result = _run_sync(base_url, store, adapter, verifier, close=http)
     typer.echo(_render_sync(result, pretty=pretty))
+
+
+@app.command()
+def publish(
+    src: Annotated[Path, typer.Option(help="Directory of files to publish (recursive).")],
+    origin_dir: Annotated[Path, typer.Option(help="Origin dir to lay out the CDN contract into.")],
+    key: Annotated[Path, typer.Option(help="Ed25519 raw private key to sign the pointer with.")],
+    bundle_id: Annotated[str, typer.Option(help="Bundle identifier recorded in the manifest.")],
+    version: Annotated[str, typer.Option(help="Bundle version recorded in the pointer.")],
+    pretty: Annotated[bool, typer.Option(help="Print a human summary instead of JSON.")] = False,
+) -> None:
+    """Chunk + sign every file under ``--src`` into a content-addressed origin dir.
+
+    The counterpart to ``sync``: produces the ``/latest`` + ``/manifest`` + ``/chunk``
+    an ``edgeproc sync`` consumes. A missing/invalid key or src fails closed (exit 1,
+    no traceback); exit 0 on success.
+    """
+    try:
+        # Lazy: the bundles substrate is an optional extra, not a core dependency.
+        from edgeproc.bundles.cas import FilesystemCacheStore  # noqa: PLC0415
+        from edgeproc.bundles.chunking import GearCDC  # noqa: PLC0415
+        from edgeproc.bundles.publish import build_bundle  # noqa: PLC0415
+        from edgeproc.bundles.signing import Ed25519Signer  # noqa: PLC0415
+    except ImportError:  # pragma: no cover - exercised only without the [bundles] extra
+        _fail("install edge-proc[bundles] to use publish")
+    signer = _load_signer(key, Ed25519Signer)
+    pointer = build_bundle(
+        files=_read_src(src),
+        store=FilesystemCacheStore(origin_dir),
+        chunker=GearCDC(),
+        signer=signer,
+        bundle_id=bundle_id,
+        version=version,
+    )
+    typer.echo(_render_pointer(pointer, pretty=pretty))
+
+
+@app.command()
+def keygen(
+    out: Annotated[Path, typer.Option(help="Dir to write private.key + public.key (raw ed25519).")],
+) -> None:
+    """Write a raw ed25519 keypair (``private.key`` + ``public.key``) into ``--out``."""
+    from edgeproc.bundles.signing import generate_keypair  # noqa: PLC0415
+
+    out.mkdir(parents=True, exist_ok=True)
+    private, public = generate_keypair()
+    (out / "private.key").write_bytes(private.private_bytes_raw())
+    (out / "public.key").write_bytes(public.public_bytes_raw())
+    typer.echo(f"wrote {out / 'private.key'} and {out / 'public.key'}")
 
 
 @app.command()
@@ -237,6 +287,32 @@ def _render_sync(result: SyncResult, *, pretty: bool) -> str:
             f"bytes_fetched={result.bytes_fetched}"
         )
     return result.model_dump_json(indent=2)
+
+
+def _load_signer(key: Path, signer_cls: type[Ed25519Signer]) -> Signer:
+    """Load a raw ed25519 private key into a ``Signer``; fail closed if it can't."""
+    try:
+        return signer_cls.from_private_bytes(key.read_bytes())
+    except (OSError, ValueError) as exc:
+        _fail(f"could not load signing key {key}: {exc}")
+
+
+def _read_src(src: Path) -> dict[str, bytes]:
+    """Read every file under ``src`` into ``{relative-posix-path: bytes}`` (fail closed)."""
+    if not src.is_dir():
+        _fail(f"src is not a directory: {src}")
+    files = {
+        p.relative_to(src).as_posix(): p.read_bytes() for p in sorted(src.rglob("*")) if p.is_file()
+    }
+    if not files:
+        _fail(f"no files to publish under {src}")
+    return files
+
+
+def _render_pointer(pointer: VersionPointer, *, pretty: bool) -> str:
+    if pretty:
+        return f"published v{pointer.version} manifest={pointer.manifest_hash[:12]}"
+    return pointer.model_dump_json(indent=2)
 
 
 def _fail(message: str) -> NoReturn:
