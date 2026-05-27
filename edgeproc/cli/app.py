@@ -23,6 +23,10 @@ from edgeproc.core.models import JsonValue, ResultEnvelope, Task
 from edgeproc.core.registry import RuntimeRegistry
 
 if TYPE_CHECKING:
+    from edgeproc.bundles.adapters import FetchAdapter
+    from edgeproc.bundles.cas import CacheStore
+    from edgeproc.bundles.signing import Verifier
+    from edgeproc.bundles.sync import SyncResult
     from edgeproc.core.protocols import Runtime
     from edgeproc.localvec.encoder import Encoder
 
@@ -69,6 +73,38 @@ def bundle_sync(
         file_base_url=file_base_url,
     )
     typer.echo(f"synced {manifest.bundle_id} v{manifest.version} ({len(manifest.files)} files)")
+
+
+@app.command()
+def sync(
+    base_url: Annotated[str, typer.Option(help="Origin base URL (/latest, /manifest, /chunk).")],
+    cache_dir: Annotated[Path, typer.Option(help="Local content-addressed store directory.")],
+    http: Annotated[bool, typer.Option(help="Fetch over HTTP/CDN instead of the filesystem.")] = (
+        False
+    ),
+    key: Annotated[
+        Path | None,
+        typer.Option(help="Pinned ed25519 trust-root pubkey (else the env trust-root path)."),
+    ] = None,
+    pretty: Annotated[bool, typer.Option(help="Print a human summary instead of JSON.")] = False,
+) -> None:
+    """Pull a signed pointer, diff + fetch only missing chunks, verify, atomically swap.
+
+    Refuses to sync without a pinned trust root (``--key`` or the env var): an
+    unverifiable sync is rejected fail-closed. Exit 0 on success, 1 otherwise.
+    """
+    try:
+        # Lazy: the bundles substrate is an optional extra, not a core dependency.
+        from edgeproc.bundles.adapters import FilesystemAdapter, HttpAdapter  # noqa: PLC0415
+        from edgeproc.bundles.cas import FilesystemCacheStore  # noqa: PLC0415
+        from edgeproc.bundles.signing import Ed25519Verifier  # noqa: PLC0415
+    except ImportError:  # pragma: no cover - exercised only without the [bundles] extra
+        _fail("install edge-proc[bundles] to use sync")
+    verifier = Ed25519Verifier.from_public_bytes(_resolve_trust_key(key).read_bytes())
+    store = FilesystemCacheStore(cache_dir)
+    adapter = HttpAdapter() if http else FilesystemAdapter()
+    result = _run_sync(base_url, store, adapter, verifier, close=http)
+    typer.echo(_render_sync(result, pretty=pretty))
 
 
 @app.command()
@@ -157,6 +193,50 @@ def _fmt_row(row: JsonValue) -> str:
 
 def _fmt_part(part: JsonValue) -> str:
     return f"{part:.3f}" if isinstance(part, float) else str(part)
+
+
+def _resolve_trust_key(key: Path | None) -> Path:
+    """The pinned verify key: ``--key`` else the setting. Neither set → fail-closed."""
+    from edgeproc.core.settings import EdgeProcSettings  # noqa: PLC0415
+
+    resolved = key if key is not None else EdgeProcSettings().trust_root_pubkey_path
+    if resolved is None:
+        _fail("no trust root: pass --key or set EDGEPROC_TRUST_ROOT_PUBKEY_PATH (refusing to sync)")
+    return resolved
+
+
+def _run_sync(
+    base_url: str,
+    store: CacheStore,
+    adapter: FetchAdapter,
+    verifier: Verifier,
+    *,
+    close: bool,
+) -> SyncResult:
+    """Run ``sync_index``; map signature/integrity/fetch failures to exit 1, no traceback."""
+    import httpx  # noqa: PLC0415
+
+    from edgeproc.bundles.cas import IntegrityError  # noqa: PLC0415
+    from edgeproc.bundles.signing import SignatureError  # noqa: PLC0415
+    from edgeproc.bundles.sync import sync_index  # noqa: PLC0415
+
+    try:
+        return sync_index(base_url=base_url, store=store, adapter=adapter, verifier=verifier)
+    except (SignatureError, IntegrityError, httpx.HTTPError, OSError) as exc:
+        _fail(f"sync failed: {exc}")
+    finally:
+        if close:
+            adapter.close()  # type: ignore[attr-defined]
+
+
+def _render_sync(result: SyncResult, *, pretty: bool) -> str:
+    if pretty:
+        return (
+            f"synced v{result.version} manifest={result.manifest_hash[:12]} "
+            f"chunks_fetched={result.chunks_fetched} chunks_reused={result.chunks_reused} "
+            f"bytes_fetched={result.bytes_fetched}"
+        )
+    return result.model_dump_json(indent=2)
 
 
 def _fail(message: str) -> NoReturn:

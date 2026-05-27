@@ -7,12 +7,14 @@ token, k) and ``bundles`` (http timeout) consume it, so it must not sit behind a
 
 A library reads config lazily: construct ``EdgeProcSettings()`` where a default is
 actually needed, never at import time. Env vars use the ``EDGEPROC_`` prefix
-(``EDGEPROC_MODEL_NAME``, ``EDGEPROC_DEFAULT_K``, ``EDGEPROC_HTTP_TIMEOUT``); the token
-uses the ecosystem-standard ``HF_TOKEN`` so it drops in beside the rest of the HF stack.
+(``EDGEPROC_MODEL_NAME``, ``EDGEPROC_DEFAULT_K``, ``EDGEPROC_HTTP_TIMEOUT``,
+``EDGEPROC_TRUST_ROOT_PUBKEY_PATH`` — the pinned sync trust-root key); the token uses
+the ecosystem-standard ``HF_TOKEN`` so it drops in beside the rest of the HF stack.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Final
 
 from pydantic import Field
@@ -35,3 +37,5 @@ class EdgeProcSettings(BaseSettings):
     hf_token: str | None = Field(default=None, validation_alias="HF_TOKEN")
     default_k: int = 10
     http_timeout: float = 30.0
+    # Pinned TUF-style trust-root public key; a `sync` with none set is refused (fail-closed).
+    trust_root_pubkey_path: Path | None = None
