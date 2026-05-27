@@ -43,6 +43,7 @@ class CacheStore(Protocol):
 
     def has_chunk(self, chunk_hash: str) -> bool: ...
     def put_chunk(self, plaintext: bytes) -> str: ...
+    def put_chunk_compressed(self, chunk_hash: str, compressed: bytes) -> None: ...
     def get_chunk(self, chunk_hash: str) -> bytes: ...
     def put_manifest(self, manifest_bytes: bytes) -> str: ...
     def get_manifest(self, manifest_hash: str) -> bytes: ...
@@ -89,6 +90,27 @@ class FilesystemCacheStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         _atomic_write(path, zstandard.compress(plaintext))
         return chunk_hash
+
+    def put_chunk_compressed(self, chunk_hash: str, compressed: bytes) -> None:
+        """Store the producer's verbatim zstd bytes, then verify fail-closed.
+
+        The consumer ingests fetched chunks WITHOUT re-compressing (the origin
+        serves the producer's exact zstd file). Integrity is re-checked on-device:
+        decompress and confirm ``sha256(plaintext) == chunk_hash``, else remove the
+        bad file and raise :class:`IntegrityError`.
+        """
+        path = self._chunk_path(chunk_hash)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write(path, compressed)
+        self._verify_or_remove(path, chunk_hash)
+
+    def _verify_or_remove(self, path: Path, chunk_hash: str) -> None:
+        try:
+            if _sha256(_decompress(path.read_bytes())) != chunk_hash:
+                raise IntegrityError(f"fetched chunk {chunk_hash} failed content-address check")
+        except IntegrityError:
+            path.unlink(missing_ok=True)
+            raise
 
     def get_chunk(self, chunk_hash: str) -> bytes:
         plaintext = _decompress(self._chunk_path(chunk_hash).read_bytes())
