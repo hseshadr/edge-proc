@@ -60,6 +60,41 @@ on-device signature + hash checks *are* the gatekeeper, and they are mandatory a
 This is the established casync/desync + TUF pattern (content-defined chunking + sign-the-manifest-not-
 every-chunk), applied to AI constructs. It is adopted, not invented.
 
+## Phased roadmap (A–D)
+
+Where this spec sits in the local-first arc. **Only Phase A is fully specified** (it is the rest of
+this document); B/C/D are **forward-declared** — goal + dependency + exit criteria only. Each **gets
+its own detailed spec when reached — not specified now, to avoid overbuilding against unknowns.**
+
+- **Phase A — sync substrate in edge-proc (THIS spec, current).** The local-first content-addressed
+  delivery engine: Gear-CDC chunking + content-addressed store + per-chunk zstd + manifest v2 (per-file
+  chunk lists) + ed25519-signed manifest/version-pointer + atomic swap + pull-based version-pointer diff
+  sync. Pure-Python, native, TDD, behind the `[bundles]` extra. **Exit criteria:** `uv run poe gate`
+  green; the patch integration test proves only-changed-chunks are fetched; a tampered
+  chunk/manifest/unknown-key is rejected fail-closed; `edgeproc sync` round-trips against a local origin;
+  the v1 `sync_bundle` path + its two pinned tests stay green.
+
+- **Phase B — edge-reco consumes the substrate.** edge-reco's catalog/index ships as delivered +
+  incrementally-patched bundles via this engine instead of baked-in — retiring the long-parked
+  catalog-sync swap. First real-consumer proof of the contract. **Depends on:** Phase A's stable
+  `sync_index` + `CacheStore`/`FetchAdapter` API. **Exit:** edge-reco end-to-end green consuming the
+  engine (gated by its existing BDD+integration+e2e suite). Own spec when reached.
+
+- **Phase C — browser / OPFS adapter (the v0.5 tier).** An `OPFSCacheStore` implementation of the
+  `CacheStore` Protocol + a Service-Worker version-pointer loop (PWA, offline after first run); bring the
+  engine up in a browser tab. **Depends on:** Phase A's `CacheStore` seam (the protocol is identical;
+  only the adapter changes). **Hard parts (product, not delivery):** model-size first-load cost,
+  cross-device inference nondeterminism, COOP/COEP + SharedArrayBuffer + cache eviction. Own spec when
+  reached.
+
+- **Phase D — template extraction.** Only after A–C **and** one genuinely different second app exist
+  (rule of three — don't crystallize a template from two repos): extract a cookiecutter + a conventions
+  doc ("depend on edge-proc's sync engine, implement these adapters, ship these manifests") so other
+  local-processing projects adopt the "edgeproc pattern." Own spec when reached.
+
+The build **order within Phase A is the TDD wave order**: manifest-v2 → chunking → signing → cas →
+sync_index+adapter → cli+integration, each green before the next.
+
 ## What's reused vs new
 
 ### REUSE — keep intact, do NOT break (pinned by tests)
@@ -95,12 +130,34 @@ with v1, so neither test changes.
 
 All new code lands under `edgeproc/bundles/`, behind the `[bundles]` extra, test-first.
 
-## Module layout (new files under `edgeproc/bundles/`)
+## Module layout
 
-### 1. `chunking.py` — content-defined chunking
+**Lean and mean (locked).** Per the simplicity-first directive, a Protocol/seam is justified **only by
+a named future implementer**. Phase A adds exactly **3 new modules** and **4 Protocol seams**, and
+nothing speculative. Everything else is a surgical extension to an existing file.
 
-- `Chunker` Protocol: `chunk(data: bytes) -> Iterator[bytes]`.
-- `GearCDC` implementation: a ~50-line Gear-hash content-defined chunker. A **FIXED, committed
+**The 4 seams (each with a named future implementer):**
+
+| Seam | Phase A impl | Named future implementer |
+|---|---|---|
+| `CacheStore` | `FilesystemCacheStore` | `OPFSCacheStore` (Phase C, browser) |
+| `Signer` | `Ed25519Signer` | Sigstore keyless signer (later) |
+| `Verifier` | `Ed25519Verifier` | Sigstore keyless verifier (later) |
+| `FetchAdapter` (existing) | `FilesystemAdapter`, `HttpAdapter` | HTTP/CDN; extended with chunk fetch |
+
+**No `Chunker` Protocol.** There is one chunker impl (`GearCDC`) and **no named second one**, so
+`GearCDC` is a **concrete class, not a Protocol** (rule of three — a Protocol is added only when a real
+second chunker appears).
+
+**The 3 new files (under `edgeproc/bundles/`):** `chunking.py`, `cas.py`, `signing.py`. zstd
+compression and the atomic `os.replace` pointer-swap are **folded into `cas.py` as storage internals —
+they are not their own modules**. Everything else (`manifest.py`, `sync.py`, `adapters.py`,
+`core/settings.py`, `cli/app.py`) is a **surgical extension** to a shipped file.
+
+### 1. `chunking.py` — content-defined chunking (1 new file)
+
+- `GearCDC` — a **concrete class** (not a Protocol; one impl, no named second one): a ~50-line Gear-hash
+  content-defined chunker, `chunk(data: bytes) -> Iterator[bytes]`. A **FIXED, committed
   256-entry Gear table** (a module-level `Final` tuple constant) makes boundaries **deterministic and
   reproducible across versions and machines** — the same bytes always split into the same chunks. This
   is why the table is a committed constant, never generated at runtime and never config.
@@ -114,16 +171,12 @@ Glossary — *content-defined chunking (CDC)*: split a file at boundaries chosen
 content (not at fixed offsets), so inserting/removing bytes shifts only the chunks near the edit, not
 every chunk after it.
 
-### 2. `compression.py` — per-chunk zstd
+### 2. `cas.py` — content-addressed store, with zstd + atomic swap folded in (1 new file)
 
-- `zstandard` one-shot compress/decompress, **per chunk**.
-- The decompressed-size hint comes from the **manifest** (`ChunkRef.size`, the uncompressed size), so
-  the decompressor can size its buffer without trusting the stored bytes.
-- May be folded into `cas.py` if it stays trivial; kept as a named seam here for clarity.
-
-### 3. `cas.py` — content-addressed store
-
-- `CacheStore` Protocol + `FilesystemCacheStore` implementation.
+- `CacheStore` **Protocol** (→ `OPFSCacheStore` in Phase C) + `FilesystemCacheStore` implementation.
+- **Per-chunk zstd and the atomic `os.replace` pointer-swap are storage internals of this module — not
+  their own modules.** `zstandard` one-shot compress/decompress runs **per chunk** inside `put_chunk` /
+  `get_chunk`; the atomic promote + GC live as methods here.
 - **Layout** (2-char fan-out is mandatory to relieve filesystem inode/directory pressure):
   - `chunks/<aa>/<sha256>` — stores the **zstd-compressed** bytes, where `<aa>` is the first two hex
     chars of the hash.
@@ -132,11 +185,24 @@ every chunk after it.
 - **Hash-over-plaintext (pinned decision):** the content-address is `sha256(plaintext_chunk)`. The
   stored file holds `zstd(plaintext)`; the manifest records the **uncompressed** size. The read path is
   always: fetch → decompress → `sha256` → compare to the file's name → **fail-closed** on any mismatch.
+  The decompressed-size hint comes from the **manifest** (`ChunkRef.size`), so the decompressor sizes
+  its buffer without trusting the stored bytes.
+- **Atomic promote (folded in):** stage the reassembled bundle + manifest **fully** on the **same
+  filesystem**, `fsync`, write a **new pointer file**, then `os.replace(new_pointer, active_pointer)`.
+  - `os.replace` is atomic on POSIX **and** Windows. Pinned decision: **not** `renameat2` (Linux-only
+    fast-path, deferred) and **not** symlinks (the Windows symlink-privilege trap).
+  - A concurrent reader sees **old-or-new, never hybrid**.
+  - Caveats captured: staged content **must be on the same mount** as the active pointer (cross-device
+    `os.replace` is not atomic), and **fsync-before-publish** is required or a crash can publish a torn
+    bundle.
+- **GC (folded in):** mark-sweep orphaned chunks against the **active manifest's chunk set** — anything
+  in `chunks/` not referenced by the active manifest is sweepable.
 - Methods (illustrative): `has(hash) -> bool`, `put_chunk(plaintext: bytes) -> str` (returns the
   hash), `get_chunk(hash) -> bytes` (decompress + verify), `put_manifest(...)`, `read_active()`,
-  `write_active(...)`, plus the chunk-set enumeration needed for diff + GC.
+  `write_active(...)`, the atomic `promote(...)` + `gc(...)`, plus the chunk-set enumeration needed for
+  diff + GC.
 
-### 4. `signing.py` — detached signatures, TUF-style root of trust
+### 3. `signing.py` — detached signatures, TUF-style root of trust (1 new file)
 
 - `Signer` / `Verifier` Protocols + `Ed25519Signer` / `Ed25519Verifier` via `cryptography`
   (`cryptography.hazmat.primitives.asymmetric.ed25519`).
@@ -146,7 +212,11 @@ every chunk after it.
 - **Sigstore keyless is DEFERRED behind these same Protocols** — a future `SigstoreVerifier` slots in
   with zero consumer change, because consumers only ever see `Verifier`.
 
-### 5. `manifest.py` — v2 models (extend; keep v1 intact)
+### Surgical extensions to existing files
+
+The remaining work is **not new modules** — it extends shipped files in place.
+
+#### `manifest.py` — v2 models (extend; keep v1 intact)
 
 The v1 models above are untouched. New v2 Pydantic models are added in the same module:
 
@@ -162,20 +232,7 @@ The v1 models above are untouched. New v2 Pydantic models are added in the same 
   reproduce** across machines/versions otherwise. Both signing and verification go through this one
   function; there is no other path to manifest bytes.
 
-### 6. `swap.py` — atomic promote + GC (or folded into `sync.py`)
-
-- **Atomic promote:** stage the reassembled bundle + manifest **fully** on the **same filesystem**,
-  `fsync`, write a **new pointer file**, then `os.replace(new_pointer, active_pointer)`.
-  - `os.replace` is atomic on POSIX **and** Windows. Pinned decision: **not** `renameat2`
-    (Linux-only fast-path, deferred) and **not** symlinks (the Windows symlink-privilege trap).
-  - A concurrent reader sees **old-or-new, never hybrid**.
-  - Caveats captured: the staged content **must be on the same mount** as the active pointer (cross-
-    device `os.replace` is not atomic), and **fsync-before-publish** is required or a crash can publish
-    a torn bundle.
-- **GC:** mark-sweep orphaned chunks against the **active manifest's chunk set** — anything in
-  `chunks/` not referenced by the active manifest is sweepable.
-
-### 7. `sync.py` — v2 engine (extend; add alongside v1 `sync_bundle`)
+#### `sync.py` — v2 engine (extend; add alongside v1 `sync_bundle`)
 
 `sync_index(...)` runs alongside `sync_bundle`. The numbered flow:
 
@@ -189,11 +246,11 @@ The v1 models above are untouched. New v2 Pydantic models are added in the same 
    a failed/aborted chunk just re-fetches; nothing else is touched.
 5. **Reassemble** each file: concatenate its chunks in order → verify `file_sha256` → write into the
    **staged** bundle directory.
-6. **Atomic-swap** the active pointer (§6).
-7. **GC** orphans (§6). Return a result carrying the manifest + stats: **bytes fetched, chunks reused
-   vs fetched**.
+6. **Atomic-swap** the active pointer (`CacheStore.promote`, folded into `cas.py`).
+7. **GC** orphans (`CacheStore.gc`, folded into `cas.py`). Return a result carrying the manifest +
+   stats: **bytes fetched, chunks reused vs fetched**.
 
-### 8. `adapters.py` — chunk/bytes fetching (extend)
+#### `adapters.py` — chunk/bytes fetching (extend)
 
 - Add a chunk/bytes fetch to the `FetchAdapter` Protocol — e.g. `fetch_chunk(base, hash, local_path)`
   or a generic `fetch_bytes(...)`. Implement in **both** `FilesystemAdapter` and `HttpAdapter`,
@@ -201,9 +258,9 @@ The v1 models above are untouched. New v2 Pydantic models are added in the same 
 - **PERF improvement (pinned as required):** `HttpAdapter` currently opens a **new `httpx.Client` per
   call** (`adapters.py:54`, `adapters.py:63`). A many-chunk sync must **reuse ONE client for the
   duration of a sync** (connection-pooling / keep-alive); refactor the adapter to accept/own a client
-  for the sync's lifetime while preserving the `transport=` seam.
+  for the sync's lifetime while preserving the `transport=` seam (single-client-per-sync).
 
-### 9. `cli` — v2 sync command (extend; keep v1)
+#### `cli/app.py` — v2 sync command (extend; keep v1)
 
 - Add: `edgeproc sync --pointer-url <url> --cache-dir <dir> [--http] [--key <pinned-pubkey>]`.
 - Keep the v1 `bundle-sync` command (`edgeproc/cli/app.py:48-71`) exactly as-is.
@@ -250,14 +307,15 @@ Per-module unit tests:
 - **`chunking.py`** — determinism + boundary reproducibility: same bytes → identical chunk sequence; a
   **1-byte edit re-chunks locally, not globally** (chunks before/after the edit region are unchanged);
   sub-min payload → one chunk.
-- **`cas.py`** — `put`/`get`/verify round-trip; **tamper rejection** (corrupt a stored chunk → `get`
-  fails closed); 2-char fan-out layout asserted.
+- **`cas.py`** — `put`/`get`/verify round-trip (incl. per-chunk zstd compress→decompress); **tamper
+  rejection** (corrupt a stored chunk → `get` fails closed); 2-char fan-out layout asserted; **atomic
+  promote**, including a **mid-failure leaving the OLD bundle intact and readable**; GC removes only
+  true orphans (never a chunk the active manifest references). (Compression and swap are internals of
+  this module, so they are tested here — not as separate module tests.)
 - **`signing.py`** — sign→verify round-trip; **reject a tampered manifest**; **reject an unknown key**
   (fail-closed); no-signature → reject.
 - **`manifest.py`** — canonical-serialization **stability**: re-serialize an equal model → byte-
   identical output → identical signature.
-- **`swap.py`** — swap **atomicity**, including a **mid-failure leaving the OLD bundle intact and
-  readable**; GC removes only true orphans (never a chunk the active manifest references).
 - **`sync.py`** — diff fetches **ONLY missing chunks** (assert reused-vs-fetched counts); a **"patch"
   scenario**: change one file → only its changed chunks fetch; pointer/manifest signature failure →
   fail-closed, no swap.
@@ -319,6 +377,20 @@ dep turns out to lack stubs.
   partial.
 - **Keep the v1 path intact** — the chunked v2 engine is additive; `sync_bundle` + the v1 manifest
   models stay, and the two pinned tests stay green.
+- **Exactly 4 Protocol seams, each with a named future implementer** — `CacheStore` (→ `OPFSCacheStore`,
+  Phase C), `Signer` + `Verifier` (→ Sigstore keyless), and the existing `FetchAdapter` (→ HTTP/CDN,
+  extended with chunk fetch). A seam is justified **only** by a named future implementer; nothing
+  speculative is added.
+- **No `Chunker` Protocol (dropped)** — there is a single chunker impl (`GearCDC`) and no named second
+  one, so `GearCDC` is a **concrete class, not a Protocol**. A `Chunker` Protocol is added only when a
+  real second chunker appears (rule of three) — abstracting one impl is speculative.
+- **zstd + atomic-swap folded into the store** — per-chunk zstd compression and the `os.replace`
+  pointer-swap (+ GC) are **storage internals of `cas.py`**, not their own modules; Phase A adds exactly
+  **3 new files** (`chunking.py`, `cas.py`, `signing.py`).
+- **Lean and mean / Karpathy simplicity-first** — "powerful yet simple, beautiful, good abstractions,
+  lean and mean" is the design rule, applied **on top of** the strict python-quality floor (≤15-line
+  functions, Grade A, no `Dict[str, Any]`): minimum seams, no speculative abstraction, surgical
+  extensions over new modules.
 
 ## Verification
 
