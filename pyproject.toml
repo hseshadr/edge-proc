@@ -56,9 +56,9 @@ dev = [
 edgeproc = "edgeproc.cli:app"
 
 [project.urls]
-Homepage = "https://github.com/hseshadr/edgeproc"
-Repository = "https://github.com/hseshadr/edgeproc"
-Issues = "https://github.com/hseshadr/edgeproc/issues"
+Homepage = "https://github.com/hseshadr/edge-proc"
+Repository = "https://github.com/hseshadr/edge-proc"
+Issues = "https://github.com/hseshadr/edge-proc/issues"
 
 [tool.uv.sources]
 # Local editable for development; published consumers resolve the version pin above.

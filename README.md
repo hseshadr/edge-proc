@@ -170,6 +170,87 @@ success=True runtime=localvec latency=82.7ms
 Drop `--pretty` for the full `ResultEnvelope` as JSON. A missing index or an
 unroutable task fails closed: non-zero exit and a message on stderr.
 
+## Ship an index to the edge: `keygen` → `publish` → `sync`
+
+So far the index lived on the same machine that routed against it. The `[bundles]`
+substrate closes the loop: **build a signed bundle once on a publisher, then pull it
+onto any number of consumers — over the filesystem or a CDN — with cryptographic proof
+you got exactly what the publisher signed, and re-fetching only the chunks that changed.**
+
+- **What it is.** Three CLI verbs over a content-addressed store. `keygen` mints an
+  ed25519 keypair. `publish` chunks every file under a directory with content-defined
+  chunking (GearCDC), writes each unique chunk once under its sha256, and signs a tiny
+  `/latest` *version pointer* with your private key. `sync` pulls that pointer, **verifies
+  the signature against a pinned trust-root pubkey before trusting anything**, diffs the
+  manifest against the local cache, fetches only the missing chunks, re-checks every chunk
+  against its content address, and atomically promotes the new version.
+- **Why it works.** The pointer is the only signed thing, and it names the manifest by
+  hash; the manifest names every chunk by hash. So a tampered chunk or a swapped manifest
+  fails its content-address check, and a forged pointer fails its signature check — both
+  exit non-zero with no traceback. Identical bytes across versions share chunks, so a
+  one-line edit to a big index re-fetches one chunk, not the whole file.
+- **Why it matters.** This is "edge as a CDN": the publisher is offline-relative to the
+  consumer, the consumer trusts only a key it pinned out-of-band, and a `v1.0.0 → v1.0.1`
+  push is a delta, not a full re-download.
+
+> Needs `pip install edge-proc[bundles]`. The walkthrough uses the filesystem; add
+> `--http` to `sync` (and serve `origin/` over any static HTTP/CDN) to go over the wire.
+
+```bash
+# 1. Mint a trust root. private.key signs on the publisher; public.key is the pin
+#    a consumer trusts. Distribute public.key out-of-band; never ship private.key.
+edgeproc keygen --out keys
+#   wrote keys/private.key and keys/public.key
+
+# 2. Stage the files to ship (here, the saved index dir from the `route` demo above),
+#    then publish: chunk + sign them into a content-addressed origin dir. `publish`
+#    records paths relative to --src, so keeping catalog_idx/ under src/ preserves it.
+mkdir -p src && cp -r catalog_idx src/
+edgeproc publish \
+    --src src \
+    --origin-dir origin \
+    --key keys/private.key \
+    --bundle-id catalog \
+    --version 1.0.0 \
+    --pretty
+#   published v1.0.0 manifest=9f3a1c4e7b02
+```
+
+`origin/` now holds the full CDN contract — `latest` (the signed pointer), `manifest/<hash>`,
+and `chunk/<hash>` (one zstd-compressed blob per unique chunk). Point a static server or
+CDN at it as-is, or sync straight off the filesystem:
+
+```bash
+# 3. On the consumer: sync into a fresh cache, trusting ONLY the pinned pubkey.
+#    Pass the key via --key, or set EDGEPROC_TRUST_ROOT_PUBKEY_PATH. With neither,
+#    sync refuses to run — an unverifiable pull is rejected fail-closed.
+edgeproc sync \
+    --base-url origin \
+    --cache-dir cache \
+    --key keys/public.key \
+    --pretty
+#   synced v1.0.0 manifest=9f3a1c4e7b02 chunks_fetched=3 chunks_reused=0 bytes_fetched=4096
+```
+
+Drop `--pretty` for the full `SyncResult` as JSON (`version`, `manifest_hash`,
+`chunks_fetched`, `chunks_reused`, `bytes_fetched`). Re-running `sync` against an
+unchanged origin fetches nothing (`chunks_fetched=0`); publishing a `1.0.1` with a small
+edit re-fetches only the chunks that actually changed (`chunks_reused` carries the rest).
+
+The synced cache materializes the same files you published, so the consumer can `route`
+against the freshly delivered index exactly as before:
+
+```bash
+edgeproc route --index-dir cache/catalog_idx --task task.json --pretty
+#   success=True runtime=localvec latency=82.7ms
+#     p1  0.219
+#     p4  0.246
+#     p2  0.556
+```
+
+Tamper with any chunk or signature in `origin/` and the next `sync` exits `1` with
+`sync failed: …` on stderr — it never promotes an unverified version into `cache/`.
+
 ## Architecture (v0)
 
 ```
