@@ -1,0 +1,89 @@
+direction: right
+
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+    pad: 32
+  }
+}
+
+publisher: "Publisher\n(build-side)" {
+  shape: rectangle
+  style.fill: "#f8fafc"
+  style.stroke: "#0f172a"
+  style.stroke-width: 2
+
+  build: "1. build index" {
+    shape: rectangle
+    style.fill: "#e2e8f0"
+  }
+  sign: "2. sign /latest\n(ed25519)" {
+    shape: rectangle
+    style.fill: "#e2e8f0"
+  }
+  build -> sign
+}
+
+origin: "Origin\n(static HTTP / CDN)" {
+  shape: cylinder
+  style.fill: "#ecfeff"
+  style.stroke: "#0e7490"
+  style.stroke-width: 2
+
+  pointer: "/latest\n(signed pointer)" {
+    shape: rectangle
+    style.fill: "#cffafe"
+  }
+  manifest: "manifest/<hash>\n(content-addressed)" {
+    shape: rectangle
+    style.fill: "#cffafe"
+  }
+  chunks: "chunk/<hash>\n(zstd-compressed)" {
+    shape: rectangle
+    style.fill: "#cffafe"
+  }
+}
+
+trust_root: "Trust root\n(public key, pinned)" {
+  shape: hexagon
+  style.fill: "#fef3c7"
+  style.stroke: "#92400e"
+  style.stroke-width: 2
+}
+
+consumer: "Consumer\n(on-device)" {
+  shape: rectangle
+  style.fill: "#f0fdf4"
+  style.stroke: "#166534"
+  style.stroke-width: 2
+
+  sync: "edgeproc sync\n(verify + diff + fetch)" {
+    shape: rectangle
+    style.fill: "#dcfce7"
+  }
+  cache: "local cache\n(CAS, OPFS / fs)" {
+    shape: cylinder
+    style.fill: "#dcfce7"
+  }
+  route: "edgeproc route\n(deterministic Router)" {
+    shape: rectangle
+    style.fill: "#dcfce7"
+  }
+
+  sync -> cache
+  cache -> route: "loads index"
+}
+
+app: "Your app" {
+  shape: rectangle
+  style.fill: "#ede9fe"
+  style.stroke: "#5b21b6"
+  style.stroke-width: 2
+}
+
+publisher.sign -> origin: "publish"
+origin -> consumer.sync: "HTTP / CDN"
+trust_root -> consumer.sync: "verify\nsignature"
+app -> consumer.route: "Task"
+consumer.route -> app: "ResultEnvelope"

@@ -1,7 +1,7 @@
 """Telemetry sinks. The default ships a no-op; nothing phones home by default.
 
-``BufferedSink`` is the capped in-memory ring lifted from edge-reco's
-``EventBuffer``, generalised over :class:`ResultEnvelope`.
+``BufferedSink`` is a capped in-memory ring of recent envelopes, useful for tests
+and in-process introspection.
 """
 
 from __future__ import annotations

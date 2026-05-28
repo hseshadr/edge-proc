@@ -1,8 +1,8 @@
 """Text embedding. ``Encoder`` is the seam; ``TextEncoder`` is the real impl.
 
-edge-reco's ``ProductEncoder`` baked the reco text-projection (title + tags +
-brand) into ``encode``. Here the projection is the consumer's job: ``TextEncoder``
-encodes plain ``list[str]``, so any consumer can supply its own text view.
+The projection from a domain object to a text view (title + tags + brand for
+products, body + headings for documents, etc.) is the consumer's job —
+``TextEncoder`` encodes plain ``list[str]``, so any consumer can supply its own.
 """
 
 from __future__ import annotations

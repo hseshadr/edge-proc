@@ -14,11 +14,11 @@ end-to-end round-trip over HTTP, a patch that fetches only the changed chunks, a
 fail-closed rejection of a tampered origin (exit 1, no traceback), and a
 fail-closed refusal when no trust root is configured.
 
-PRODUCTION ANALOG: edge-reco's ``deploy/docker-compose.yml`` Caddy stack is the
-edge/production analog of this ``http.server`` origin — same URL scheme. Its caching
-evolves from TTL today to immutable-chunks + short-TTL-``/latest`` per this spec. We
-deliberately do NOT add a Docker dependency to the automated suite; stdlib
-``http.server`` is the CI-safe stand-in.
+PRODUCTION ANALOG: a Caddy / nginx / static-CDN edge fronting a CAS directory is the
+production analog of this ``http.server`` origin — same URL scheme, with caching
+that evolves to immutable-chunks plus a short-TTL ``/latest`` pointer. We deliberately
+do NOT add a Docker dependency to the automated suite; stdlib ``http.server`` is the
+CI-safe stand-in.
 """
 
 from __future__ import annotations

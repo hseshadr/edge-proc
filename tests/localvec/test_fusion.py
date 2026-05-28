@@ -1,4 +1,4 @@
-"""Reciprocal Rank Fusion — lifted verbatim from edge-reco; pure and deterministic."""
+"""Reciprocal Rank Fusion — pure, deterministic, order-only fusion of two ranked lists."""
 
 from __future__ import annotations
 

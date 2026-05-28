@@ -1,7 +1,7 @@
 """FAISS-backed vector index that implements shared-libs' ``VectorIndex`` Protocol.
 
-This is the bridge between edge-reco's sync, build-once FAISS index and
-``shared_libs_python.vector_mgmt``'s async, lifecycle-managed contract:
+Bridges a synchronous, build-once FAISS index into ``shared_libs_python.vector_mgmt``'s
+async, lifecycle-managed contract:
 
 - CPU-bound FAISS calls run in ``asyncio.to_thread`` so the event loop never blocks.
 - ``delete`` tombstones by id (FlatIP has no native delete); ``search`` over-fetches
@@ -9,7 +9,7 @@ This is the bridge between edge-reco's sync, build-once FAISS index and
 - ``get_stats`` reports the tombstone ratio that drives ``IndexManager`` rebuilds.
 
 Once constructed it drops straight into shared-libs' ``IndexManager`` and partition
-strategies — the whole point of building EdgeProc on top of lego #1.
+strategies.
 """
 
 from __future__ import annotations

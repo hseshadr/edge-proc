@@ -1,0 +1,92 @@
+direction: down
+
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+    pad: 28
+  }
+}
+
+stage1: "1. keygen" {
+  shape: rectangle
+  style.fill: "#fef3c7"
+  style.stroke: "#92400e"
+  style.stroke-width: 2
+
+  detail: |md
+    Mint an ed25519 keypair.
+    `private.key` signs on the publisher.
+    `public.key` is the pin a consumer trusts.
+    Distributed out-of-band.
+  | {style.fill: "#fffbeb"}
+}
+
+stage2: "2. publish" {
+  shape: rectangle
+  style.fill: "#dbeafe"
+  style.stroke: "#1e3a8a"
+  style.stroke-width: 2
+
+  detail: |md
+    Chunk every file under `--src/` with
+    content-defined chunking (GearCDC).
+    Write each unique chunk once under
+    its sha256, build a manifest, sign
+    a `/latest` version pointer.
+  | {style.fill: "#eff6ff"}
+}
+
+stage3: "3. sync" {
+  shape: rectangle
+  style.fill: "#dcfce7"
+  style.stroke: "#166534"
+  style.stroke-width: 2
+
+  detail: |md
+    Pull `/latest`. **Verify signature**
+    against pinned pubkey, or fail closed.
+    Diff manifest against local cache.
+    Fetch only the missing chunks.
+    Re-check each chunk's content hash.
+    Atomically promote the new version.
+  | {style.fill: "#f0fdf4"}
+}
+
+stage4: "4. route" {
+  shape: rectangle
+  style.fill: "#ede9fe"
+  style.stroke: "#5b21b6"
+  style.stroke-width: 2
+
+  detail: |md
+    Pure deterministic router picks the
+    first registered runtime that
+    `ACCEPTs` the Task. Same `(Task,
+    registry)` → same runtime, always.
+    Trace is replayable.
+  | {style.fill: "#faf5ff"}
+}
+
+stage1 -> stage2: "private.key"
+stage2 -> stage3: "HTTP / CDN /\nfilesystem"
+stage3 -> stage4: "materialized\nindex dir"
+
+invariant: |md
+  ## Invariants
+
+  - Only the **pointer** is signed.
+  - The **manifest** is named by content hash.
+  - Each **chunk** is named by content hash.
+  - Identical bytes across versions → identical chunks
+    (a one-line edit re-fetches one chunk, not the whole file).
+  - Tamper any chunk or manifest → fails its content-address check.
+  - Forge the pointer → fails the signature check.
+  - Both failures exit non-zero with no traceback.
+| {
+  shape: rectangle
+  style.fill: "#f8fafc"
+  style.stroke: "#475569"
+  style.stroke-dash: 3
+  near: bottom-center
+}

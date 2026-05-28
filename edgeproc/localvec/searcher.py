@@ -1,8 +1,8 @@
-"""BM25 keyword search, lifted from edge-reco and decoupled from any domain model.
+"""BM25 keyword search, decoupled from any domain model.
 
-edge-reco's ``KeywordSearcher.build(products)`` is split here: the generic core is
-``from_texts(texts, ids)``; the reco-specific projection (title + tags + brand →
-text) stays in the consumer.
+The core takes plain ``(texts, ids)``: any domain-specific projection — products to
+title+tags+brand, documents to body+headings, posts to author+content, etc. — stays
+in the consumer. This keeps the searcher reusable across catalogues.
 """
 
 from __future__ import annotations

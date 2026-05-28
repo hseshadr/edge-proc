@@ -1,7 +1,6 @@
 """Reciprocal Rank Fusion for combining keyword and vector result lists.
 
-Lifted from edge-reco unchanged — a pure function over ``(id, score)`` tuples,
-generic to any two ranked lists.
+A pure function over ``(id, score)`` tuples, generic to any two ranked lists.
 """
 
 from __future__ import annotations

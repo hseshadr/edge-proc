@@ -16,11 +16,12 @@ picks which runtime serves it. EdgeProc is a library an app embeds, not a cloud 
   regulator (or you) can prove which runtime touched a request. Heavy deps are opt-in extras; the core
   is tiny.
 - **Why it exists.** Every local-AI app re-solves "pick a runtime / run the task / verify the index"
-  differently and usually badly. EdgeProc does it once so downstream projects (edge-reco, aml-filter,
-  spookie, …) just `import edgeproc`.
-- **Status.** v0, extract-first: the substrate is lifted from the tested `edge-reco` codebase. The
-  Wasm-3.0 deterministic kernel, Biscuit capability tokens, and Sigstore-signed bundles are the
-  **roadmap**, kept as Protocol seams — not built in v0. See `edgeproc.md` spec for the north star.
+  differently and usually badly. EdgeProc does it once so downstream applications — on-device
+  recommenders, content filters, sandboxed runtimes, offline assistants — just `import edgeproc`.
+- **Status.** v0: a deterministic router, a FAISS-backed local-vector runtime, and a content-addressed
+  signed-bundle sync substrate, all shipped behind opt-in extras. The Wasm-3.0 deterministic kernel,
+  Biscuit capability tokens, and Sigstore-keyless bundles are the **roadmap**, kept as Protocol
+  seams — not built in v0.
 
 ## Install
 
@@ -228,6 +229,15 @@ your app ── Task ──▶ EdgeProc.run()
         seams (roadmap): Wasmtime kernel · Biscuit caps · Sigstore-keyless bundles
                          (today: pinned ed25519 + content-addressed CAS, shipped)
 ```
+
+For the full picture — system context, bundle lifecycle, the verification chain, and the
+module map — see [**docs/ARCHITECTURE.md**](docs/ARCHITECTURE.md) (with d2 diagrams).
+
+## Docs
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system context, bundle lifecycle, CAS + manifest, module boundaries, seams.
+- [docs/QUICKSTART.md](docs/QUICKSTART.md) — clone → gate → CLI walkthrough of the full `keygen → publish → sync → route` loop in five minutes.
+- [docs/diagrams/](docs/diagrams/) — d2 sources + rendered SVGs.
 
 ## Develop
 

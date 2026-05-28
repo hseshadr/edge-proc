@@ -1,0 +1,62 @@
+direction: right
+
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+    pad: 28
+  }
+}
+
+origin: "origin/  (content-addressed store)" {
+  shape: rectangle
+  style.fill: "#f0f9ff"
+  style.stroke: "#0369a1"
+  style.stroke-width: 2
+
+  pointer: "latest\n(signed)" {
+    shape: document
+    style.fill: "#fef3c7"
+    style.stroke: "#92400e"
+  }
+
+  manifests: "manifest/" {
+    shape: rectangle
+    style.fill: "#e0f2fe"
+
+    m_v100: "<sha256-v1.0.0>" {shape: document; style.fill: "#bae6fd"}
+    m_v101: "<sha256-v1.0.1>" {shape: document; style.fill: "#bae6fd"}
+  }
+
+  chunks: "chunk/" {
+    shape: rectangle
+    style.fill: "#e0f2fe"
+
+    c1: "<sha256-A>\nzstd blob" {shape: document; style.fill: "#bae6fd"}
+    c2: "<sha256-B>\nzstd blob" {shape: document; style.fill: "#bae6fd"}
+    c3: "<sha256-C>\nzstd blob" {shape: document; style.fill: "#bae6fd"}
+    c4: "<sha256-D>\nzstd blob" {shape: document; style.fill: "#bae6fd"}
+  }
+}
+
+verify: "Verification chain (top → bottom; any break = fail closed)" {
+  shape: rectangle
+  style.fill: "#fef2f2"
+  style.stroke: "#991b1b"
+  style.stroke-width: 2
+  style.stroke-dash: 4
+
+  step1: "ed25519(pointer)  ==  pinned trust root" {shape: rectangle; style.fill: "#fee2e2"}
+  step2: "pointer.manifest_hash  ==  sha256(manifest bytes)" {shape: rectangle; style.fill: "#fee2e2"}
+  step3: "each chunk.hash  ==  sha256(fetched bytes)" {shape: rectangle; style.fill: "#fee2e2"}
+
+  step1 -> step2
+  step2 -> step3
+}
+
+origin.pointer -> origin.manifests.m_v101: "names by hash"
+origin.manifests.m_v101 -> origin.chunks.c1: "lists chunks"
+origin.manifests.m_v101 -> origin.chunks.c3
+origin.manifests.m_v101 -> origin.chunks.c4
+origin.manifests.m_v100 -> origin.chunks.c1: "v1.0.0 + v1.0.1\nshare chunk A"
+origin.manifests.m_v100 -> origin.chunks.c2
