@@ -16,7 +16,7 @@ from __future__ import annotations
 from time import perf_counter
 from typing import Final, cast
 
-from shared_libs_python.vector_mgmt.core.types import VectorIndex
+from shared_libs_python.vector_mgmt.core.types import IndexConfig, VectorEmbedding, VectorIndex
 
 from edgeproc._version import __version__
 from edgeproc.core.models import (
@@ -51,6 +51,33 @@ class LocalVecRuntime:
         self._index = index
         self._keyword = keyword
         self._default_k = EdgeProcSettings().default_k
+
+    @classmethod
+    async def from_texts(
+        cls,
+        catalog: dict[str, str],
+        *,
+        encoder: Encoder,
+        index_name: str = "catalog",
+    ) -> LocalVecRuntime:
+        """Encode ``catalog`` (``{id: text}``), build a FAISS index + BM25, return a runtime.
+
+        The one-call wiring path the README quickstart uses. Use the explicit
+        constructor when you already have an index (e.g. loaded from disk) or want a
+        different ``VectorIndex`` implementation.
+        """
+        # Import locally to keep the module dep-light: FaissVectorIndex pulls FAISS.
+        from edgeproc.localvec.faiss_index import FaissVectorIndex  # noqa: PLC0415
+
+        ids, texts = list(catalog), list(catalog.values())
+        index = FaissVectorIndex(index_name, IndexConfig(dimension=encoder.dim))
+        await index.insert(
+            [
+                VectorEmbedding(entity_id=entity_id, embedding=vector.tolist())
+                for entity_id, vector in zip(ids, encoder.encode_texts(texts), strict=True)
+            ]
+        )
+        return cls(encoder, index, KeywordSearcher.from_texts(texts, ids))
 
     def can_handle(self, task: Task) -> CapabilityVerdict:
         if task.privacy_mode != PrivacyMode.LOCAL_ONLY:

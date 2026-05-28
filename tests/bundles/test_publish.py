@@ -75,6 +75,21 @@ def test_build_bundle_round_trips_into_fresh_store(tmp_path: Path) -> None:
     assert len(faiss.chunks) >= 2  # the >256 KiB file really split
 
 
+def test_republish_unchanged_catalog_touches_zero_chunk_files(tmp_path: Path) -> None:
+    """A second ``build_bundle`` over the same files mustn't rewrite existing chunks."""
+    private, _public = generate_keypair()
+    origin = tmp_path / "origin"
+    _publish(origin, Ed25519Signer(private), _FILES, "1.0.0")
+
+    chunk_dir = origin / "chunk"
+    pre = {p.name: p.stat().st_ino for p in chunk_dir.iterdir()}
+    _publish(origin, Ed25519Signer(private), _FILES, "1.0.1")
+    post = {p.name: p.stat().st_ino for p in chunk_dir.iterdir()}
+
+    # Same inode for every chunk → not rewritten (hardlink reused, not replaced).
+    assert pre == post
+
+
 def test_build_bundle_is_deterministic(tmp_path: Path) -> None:
     private, _public = generate_keypair()
     a = _publish(tmp_path / "a", Ed25519Signer(private), _FILES, "1.0.0")
@@ -134,6 +149,41 @@ def test_cli_publish_then_sync_round_trips(tmp_path: Path) -> None:
     )
     assert sync.exit_code == 0, sync.stdout
     _assert_cache_materializes(cache, origin)
+
+
+def test_cli_sync_materialize_writes_real_files(tmp_path: Path) -> None:
+    """``--materialize-to`` must reassemble every published file byte-for-byte."""
+    src = _write_src(tmp_path / "src", _FILES)
+    keys = tmp_path / "keys"
+    assert runner.invoke(app, ["keygen", "--out", str(keys)]).exit_code == 0
+    origin = tmp_path / "origin"
+    pub = runner.invoke(
+        app,
+        [
+            "publish",
+            "--src", str(src),
+            "--origin-dir", str(origin),
+            "--key", str(keys / "private.key"),
+            "--bundle-id", "b",
+            "--version", "1.0.0",
+        ],
+    )  # fmt: skip
+    assert pub.exit_code == 0, pub.stdout
+
+    out = tmp_path / "materialized"
+    sync_result = runner.invoke(
+        app,
+        [
+            "sync",
+            "--base-url", str(origin),
+            "--cache-dir", str(tmp_path / "cache"),
+            "--key", str(keys / "public.key"),
+            "--materialize-to", str(out),
+        ],
+    )  # fmt: skip
+    assert sync_result.exit_code == 0, sync_result.stdout
+    for path, original in _FILES.items():
+        assert (out / path).read_bytes() == original
 
 
 def test_cli_publish_missing_key_fails_closed(tmp_path: Path) -> None:

@@ -75,12 +75,18 @@ def sync(
         Path | None,
         typer.Option(help="Pinned ed25519 trust-root pubkey (else the env trust-root path)."),
     ] = None,
+    materialize_to: Annotated[
+        Path | None,
+        typer.Option(help="Also reassemble every file from the synced cache into this dir."),
+    ] = None,
     pretty: Annotated[bool, typer.Option(help="Print a human summary instead of JSON.")] = False,
 ) -> None:
     """Pull a signed pointer, diff + fetch only missing chunks, verify, atomically swap.
 
     Refuses to sync without a pinned trust root (``--key`` or the env var): an
-    unverifiable sync is rejected fail-closed. Exit 0 on success, 1 otherwise.
+    unverifiable sync is rejected fail-closed. ``--materialize-to`` reassembles the
+    synced files (fail-closed on a reassembly mismatch) so a follow-on ``route`` can
+    read them by path. Exit 0 on success, 1 otherwise.
     """
     try:
         # Lazy: the bundles substrate is an optional extra, not a core dependency.
@@ -93,6 +99,8 @@ def sync(
     store = FilesystemCacheStore(cache_dir)
     adapter = HttpAdapter() if http else FilesystemAdapter()
     result = _run_sync(base_url, store, adapter, verifier, close=http)
+    if materialize_to is not None:
+        _materialize_active(store, materialize_to)
     typer.echo(_render_sync(result, pretty=pretty))
 
 
@@ -265,6 +273,21 @@ def _run_sync(
     finally:
         if close:
             adapter.close()  # type: ignore[attr-defined]
+
+
+def _materialize_active(store: CacheStore, out: Path) -> None:
+    """Reassemble every file in the active manifest into ``out/`` (fail-closed)."""
+    from edgeproc.bundles.manifest import IndexManifest  # noqa: PLC0415
+    from edgeproc.bundles.sync import materialize_file  # noqa: PLC0415
+
+    pointer = store.read_active()
+    if pointer is None:  # pragma: no cover - sync_index always promotes a pointer
+        _fail("no active pointer to materialize")
+    manifest = IndexManifest.model_validate_json(store.get_manifest(pointer.manifest_hash))
+    for entry in manifest.files:
+        target = out / entry.path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(materialize_file(store, manifest, entry.path))
 
 
 def _render_sync(result: SyncResult, *, pretty: bool) -> str:

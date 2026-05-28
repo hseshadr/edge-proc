@@ -65,6 +65,16 @@ async def test_embed_returns_one_vector_per_text() -> None:
     assert len(result.payload["embeddings"]) == 2
 
 
+async def test_from_texts_wires_a_search_ready_runtime() -> None:
+    runtime = await LocalVecRuntime.from_texts(
+        {"p1": "red shoes", "p2": "blue boots", "p3": "green dress"},
+        encoder=FakeEncoder(),
+    )
+    result = await runtime.execute(_task(TaskKind.SEARCH, query="red shoes", k=2))
+    assert result.success is True
+    assert result.payload["results"][0][0] == "p1"
+
+
 async def test_search_ranks_the_matching_document_first() -> None:
     runtime = await _populated_runtime()
     result = await runtime.execute(_task(TaskKind.SEARCH, query="red shoes", k=3))

@@ -33,61 +33,26 @@ pip install edge-proc[localvec,bundles]  # full local substrate
 
 ## Quickstart
 
-In v0 you **register runtimes explicitly** — `EdgeProc.local_default()` gives you a
-deterministic router over an *empty* registry (auto-probing installed kernels is
-roadmap). So the real workflow is: build a `LocalVecRuntime`, register it, then
-route a task. This semantic-search demo runs end to end:
-
-> Needs `pip install edge-proc[localvec]`. First run downloads the
-> `all-MiniLM-L6-v2` model (~90 MB); it is cached after that.
+`EdgeProc.from_texts` wires the local vector runtime — encoder, FAISS index, BM25 — in
+one call, registers it, and routes a search task end to end. Needs
+`pip install edge-proc[localvec]`; first run downloads `all-MiniLM-L6-v2` (~90 MB).
 
 ```python
 import asyncio
 
-from shared_libs_python.vector_mgmt.core.types import IndexConfig, VectorEmbedding
-
-from edgeproc import EdgeProc, PrivacyMode, Task, TaskKind
-from edgeproc.core.registry import RuntimeRegistry
+from edgeproc import EdgeProc, PrivacyMode, RuntimeRegistry, Task, TaskKind
 from edgeproc.localvec.encoder import TextEncoder
-from edgeproc.localvec.faiss_index import FaissVectorIndex
 from edgeproc.localvec.runtime import LocalVecRuntime
-from edgeproc.localvec.searcher import KeywordSearcher
 
-CATALOG = {
-    "p1": "red running shoes",
-    "p2": "waterproof hiking boots",
-    "p3": "blue denim jacket",
-    "p4": "trail running sneakers",
-}
+CATALOG = {"p1": "red running shoes", "p2": "waterproof hiking boots", "p3": "trail sneakers"}
 
 
 async def main() -> None:
-    ids, texts = list(CATALOG), list(CATALOG.values())
-
-    # 1. Build a local vector runtime: an encoder, a FAISS index, and a BM25 searcher.
-    encoder = TextEncoder()
-    index = FaissVectorIndex("catalog", IndexConfig(dimension=encoder.dim))
-    await index.insert(
-        [
-            VectorEmbedding(entity_id=i, embedding=v.tolist())
-            for i, v in zip(ids, encoder.encode_texts(texts), strict=True)
-        ]
+    runtime = await LocalVecRuntime.from_texts(CATALOG, encoder=TextEncoder())
+    registry = RuntimeRegistry(); registry.register(runtime)
+    result = await EdgeProc(registry=registry).run(
+        Task(kind=TaskKind.SEARCH, payload={"query": "shoes for running"}, privacy_mode=PrivacyMode.LOCAL_ONLY)
     )
-    runtime = LocalVecRuntime(encoder, index, KeywordSearcher.from_texts(texts, ids))
-
-    # 2. Register it, then hand EdgeProc a Task. The pure router picks the runtime.
-    registry = RuntimeRegistry()
-    registry.register(runtime)
-    ep = EdgeProc(registry=registry)
-
-    result = await ep.run(
-        Task(
-            kind=TaskKind.SEARCH,
-            payload={"query": "shoes for running", "k": 3},
-            privacy_mode=PrivacyMode.LOCAL_ONLY,
-        )
-    )
-    print(result.success, result.runtime_used, f"{result.latency_ms:.1f}ms")
     for entity_id, distance in result.payload["results"]:
         print(f"  {entity_id}  {CATALOG[entity_id]:<24} distance={distance:.3f}")
 
@@ -95,15 +60,9 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-```text
-True localvec 31.2ms
-  p1  red running shoes        distance=0.219
-  p4  trail running sneakers   distance=0.246
-  p2  waterproof hiking boots  distance=0.556
-```
-
-Swap `TaskKind.SEARCH` for `TaskKind.EMBED` with `payload={"texts": [...]}` to get
-raw vectors back, or `TaskKind.RANK` for hybrid BM25 + vector fusion.
+Swap `TaskKind.SEARCH` for `TaskKind.EMBED` (raw vectors) or `TaskKind.RANK` (hybrid
+BM25 + vector fusion). For the full registry-wiring version + a publish→sync→route
+loop end to end, see [`examples/`](examples/).
 
 ### …or from the CLI: `route`
 
@@ -224,10 +183,13 @@ CDN at it as-is, or sync straight off the filesystem:
 # 3. On the consumer: sync into a fresh cache, trusting ONLY the pinned pubkey.
 #    Pass the key via --key, or set EDGEPROC_TRUST_ROOT_PUBKEY_PATH. With neither,
 #    sync refuses to run — an unverifiable pull is rejected fail-closed.
+#    `--materialize-to` reassembles every synced file into a plain directory so a
+#    follow-on `route` can read the saved index directly.
 edgeproc sync \
     --base-url origin \
     --cache-dir cache \
     --key keys/public.key \
+    --materialize-to materialized \
     --pretty
 #   synced v1.0.0 manifest=9f3a1c4e7b02 chunks_fetched=3 chunks_reused=0 bytes_fetched=4096
 ```
@@ -237,11 +199,11 @@ Drop `--pretty` for the full `SyncResult` as JSON (`version`, `manifest_hash`,
 unchanged origin fetches nothing (`chunks_fetched=0`); publishing a `1.0.1` with a small
 edit re-fetches only the chunks that actually changed (`chunks_reused` carries the rest).
 
-The synced cache materializes the same files you published, so the consumer can `route`
-against the freshly delivered index exactly as before:
+The materialized directory holds the exact files you published, so the consumer can
+`route` against the freshly delivered index directly:
 
 ```bash
-edgeproc route --index-dir cache/catalog_idx --task task.json --pretty
+edgeproc route --index-dir materialized/catalog_idx --task task.json --pretty
 #   success=True runtime=localvec latency=82.7ms
 #     p1  0.219
 #     p4  0.246
@@ -263,7 +225,8 @@ your app ── Task ──▶ EdgeProc.run()
    │ edgeproc.bundles   manifest + checksum + sync  │  [bundles]
    │ edgeproc.cli       Typer CLI                    │  (default)
    └─────────────────────────────────────────────┘
-        seams (deferred): Wasmtime kernel · Biscuit caps · Sigstore bundles
+        seams (roadmap): Wasmtime kernel · Biscuit caps · Sigstore-keyless bundles
+                         (today: pinned ed25519 + content-addressed CAS, shipped)
 ```
 
 ## Develop

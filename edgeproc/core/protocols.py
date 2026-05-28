@@ -40,7 +40,13 @@ class Router(Protocol):
 
 @runtime_checkable
 class TelemetrySink(Protocol):
-    """The only observability path. Runtimes do not log, write files, or phone home."""
+    """The only observability path. Runtimes do not log, write files, or phone home.
+
+    The shipped implementations are :class:`NullSink` (the default, discards everything)
+    and :class:`BufferedSink` (an in-memory ring). The seam exists so an ``OTelSink``
+    (OpenTelemetry spans) or ``FileSink`` (JSONL audit log) can drop in without any
+    runtime change — a deployment swaps the sink at the facade, never inside a runtime.
+    """
 
     def emit(self, envelope: ResultEnvelope) -> None:
         """Record one result envelope."""
