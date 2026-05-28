@@ -43,21 +43,21 @@ class EdgeProc:
 
     async def _dispatch(self, task: Task, runtime: Runtime | None) -> ResultEnvelope:
         if runtime is None:
-            return _no_runtime_envelope(task)
+            return self._no_runtime_envelope(task)
         return await runtime.execute(task)
 
-
-def _no_runtime_envelope(task: Task) -> ResultEnvelope:
-    """The fail-closed result when no runtime accepts — no silent local fallback."""
-    return ResultEnvelope(
-        request_id=task.request_id,
-        task_kind=task.kind,
-        success=False,
-        payload={},
-        runtime_used="none",
-        privacy_mode=task.privacy_mode,
-        confidence=0.0,
-        latency_ms=0.0,
-        provenance=Provenance(signature_status="unsigned", runtime_version=__version__),
-        error="no_runtime_accepted",
-    )
+    @staticmethod
+    def _no_runtime_envelope(task: Task) -> ResultEnvelope:
+        """The fail-closed result when no runtime accepts — no silent local fallback."""
+        return ResultEnvelope(
+            request_id=task.request_id,
+            task_kind=task.kind,
+            success=False,
+            payload={},
+            runtime_used="none",
+            privacy_mode=task.privacy_mode,
+            confidence=0.0,
+            latency_ms=0.0,
+            provenance=Provenance(signature_status="unsigned", runtime_version=__version__),
+            error="no_runtime_accepted",
+        )

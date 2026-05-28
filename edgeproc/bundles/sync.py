@@ -1,14 +1,15 @@
-"""Sync a bundle from an origin into a local cache, verifying every file.
+"""Sync a v2 signed, chunked bundle from an origin into a local cache.
 
-Lifted from edge-reco's ``sync_catalog`` and generalised over ``FetchAdapter``.
-Fails closed: a checksum mismatch raises rather than caching corrupt bytes.
+The substrate is fail-closed at every layer: the version pointer must verify
+under the pinned ed25519 key, the manifest must content-address to the pointer,
+each chunk is verbatim-ingested into the CAS (which hashes on write), and the
+final reassembly check proves every file's chunks concat to its declared sha256.
 """
 
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
-from typing import Final
+from typing import NamedTuple
 
 import structlog
 from pydantic import BaseModel
@@ -16,50 +17,14 @@ from pydantic import BaseModel
 from edgeproc.bundles.adapters import FetchAdapter
 from edgeproc.bundles.cas import CacheStore, IntegrityError
 from edgeproc.bundles.manifest import (
-    BundleFile,
-    BundleManifest,
     FileEntry,
     IndexManifest,
     VersionPointer,
     canonical_bytes,
-    validate_checksum,
 )
 from edgeproc.bundles.signing import Verifier
 
 log = structlog.get_logger(__name__)
-
-_MANIFEST_FILE: Final[str] = "manifest.json"
-
-
-def sync_bundle(
-    *,
-    manifest_url: str,
-    cache_dir: Path,
-    adapter: FetchAdapter,
-    file_base_url: str,
-) -> BundleManifest:
-    """Fetch the manifest, download + verify each file, then cache the manifest."""
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    log.info("fetching manifest", url=manifest_url)
-    manifest = adapter.fetch_manifest(manifest_url)
-    for entry in manifest.files:
-        _fetch_and_verify(adapter, file_base_url, entry, cache_dir)
-    (cache_dir / _MANIFEST_FILE).write_text(manifest.model_dump_json(indent=2))
-    log.info("sync complete", bundle_id=manifest.bundle_id, version=manifest.version)
-    return manifest
-
-
-def _fetch_and_verify(
-    adapter: FetchAdapter,
-    file_base_url: str,
-    entry: BundleFile,
-    cache_dir: Path,
-) -> None:
-    local_path = cache_dir / entry.path
-    log.info("downloading", path=entry.path, local=str(local_path))
-    adapter.fetch_file(file_base_url, entry.path, local_path)
-    if not validate_checksum(local_path, entry.checksum):
-        raise ValueError(f"checksum validation failed for {entry.path}")
 
 
 class SyncResult(BaseModel):
@@ -94,15 +59,22 @@ def _fetch_manifest(
     return IndexManifest.model_validate_json(raw)
 
 
-def _missing_chunks(manifest: IndexManifest, store: CacheStore) -> tuple[set[str], int]:
-    """Return (chunks to fetch, reused count) over the manifest's deduped chunk set."""
+class MissingChunks(NamedTuple):
+    """Diff of the manifest's chunk set against the local cache."""
+
+    to_fetch: frozenset[str]
+    reused: int
+
+
+def _missing_chunks(manifest: IndexManifest, store: CacheStore) -> MissingChunks:
+    """Return chunks to fetch + reused count over the manifest's deduped chunk set."""
     wanted = {ref.hash for entry in manifest.files for ref in entry.chunks}
-    missing = {h for h in wanted if not store.has_chunk(h)}
-    return missing, len(wanted) - len(missing)
+    missing = frozenset(h for h in wanted if not store.has_chunk(h))
+    return MissingChunks(to_fetch=missing, reused=len(wanted) - len(missing))
 
 
 def _fetch_missing(
-    base_url: str, missing: set[str], adapter: FetchAdapter, store: CacheStore
+    base_url: str, missing: frozenset[str], adapter: FetchAdapter, store: CacheStore
 ) -> int:
     """Fetch + verbatim-ingest each missing chunk (fail-closed); return bytes fetched."""
     fetched = 0
@@ -127,15 +99,15 @@ def sync_index(
     """Pull a signed pointer, diff + fetch missing chunks, verify, atomically swap."""
     pointer = _fetch_pointer(base_url, adapter, verifier)
     manifest = _fetch_manifest(base_url, pointer, adapter, store)
-    missing, reused = _missing_chunks(manifest, store)
-    bytes_fetched = _fetch_missing(base_url, missing, adapter, store)
+    diff = _missing_chunks(manifest, store)
+    bytes_fetched = _fetch_missing(base_url, diff.to_fetch, adapter, store)
     _verify_reassembly(manifest, store)
     store.promote(pointer)
     return SyncResult(
         version=pointer.version,
         manifest_hash=pointer.manifest_hash,
-        chunks_fetched=len(missing),
-        chunks_reused=reused,
+        chunks_fetched=len(diff.to_fetch),
+        chunks_reused=diff.reused,
         bytes_fetched=bytes_fetched,
     )
 

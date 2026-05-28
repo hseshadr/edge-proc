@@ -9,7 +9,7 @@ can't do on its own).
 from __future__ import annotations
 
 import asyncio
-import importlib.util
+import importlib
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, NoReturn
@@ -42,38 +42,26 @@ def version() -> None:
 
 @app.command("list-runtimes")
 def list_runtimes() -> None:
-    """Report which optional runtime extras are installed."""
+    """Report which optional runtime extras are installed.
+
+    Imports each extra's actual entry-point module so a partial install (e.g.
+    cryptography without httpx, numpy without faiss) reports the extra as
+    unavailable rather than misleadingly green.
+    """
     availability = {
-        "localvec": importlib.util.find_spec("faiss") is not None,
-        "bundles": importlib.util.find_spec("httpx") is not None,
+        "localvec": _can_import("edgeproc.localvec.runtime"),
+        "bundles": _can_import("edgeproc.bundles.sync"),
     }
     typer.echo(json.dumps(availability))
 
 
-@app.command("bundle-sync")
-def bundle_sync(
-    manifest_url: str,
-    cache_dir: Path,
-    file_base_url: str,
-    http: bool = typer.Option(False, help="Fetch over HTTP/CDN instead of the filesystem."),
-) -> None:
-    """Download a bundle, checksum-verify every file, and cache it locally."""
+def _can_import(module: str) -> bool:
+    """True iff ``module`` and its transitive dependencies all import successfully."""
     try:
-        # Lazy: the bundles substrate is an optional extra, not a core dependency.
-        from edgeproc.bundles.adapters import FilesystemAdapter, HttpAdapter  # noqa: PLC0415
-        from edgeproc.bundles.sync import sync_bundle  # noqa: PLC0415
-    except ImportError:  # pragma: no cover - exercised only without the [bundles] extra
-        typer.echo("install edge-proc[bundles] to use bundle-sync", err=True)
-        raise typer.Exit(code=1) from None
-
-    adapter = HttpAdapter() if http else FilesystemAdapter()
-    manifest = sync_bundle(
-        manifest_url=manifest_url,
-        cache_dir=cache_dir,
-        adapter=adapter,
-        file_base_url=file_base_url,
-    )
-    typer.echo(f"synced {manifest.bundle_id} v{manifest.version} ({len(manifest.files)} files)")
+        importlib.import_module(module)
+    except ImportError:
+        return False
+    return True
 
 
 @app.command()

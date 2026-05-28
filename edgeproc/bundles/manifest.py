@@ -1,55 +1,20 @@
-"""Bundle manifest model + sha256 checksum validation.
+"""Bundle manifest models — v2 chunked, content-addressed, signed by version pointer.
 
-Generalised from edge-reco's catalog manifest: a bundle is just a versioned set of
-content-addressed files plus opaque ``metadata`` the consumer defines (e.g.
-``embedding_model``). The signed / atomically-swapped ``BundleManager`` (Sigstore +
-content-addressed storage) is roadmap; v0 ships the functional fetch + verify path.
+A bundle is a versioned set of content-addressed files split into deduped chunks.
+The :class:`VersionPointer` is the *only* signed object; it names the
+:class:`IndexManifest` by its content hash, and the manifest names each chunk by
+content hash. Tampering with any layer fails its hash or signature check.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
-from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
-_SHA256_PREFIX: Final[str] = "sha256:"
-
 # Mirrors shared-libs' convention: opaque metadata values are scalars, never `Any`.
 Scalar = str | int | float | bool | None
-
-
-class BundleFile(BaseModel):
-    """One content-addressed file in a bundle."""
-
-    path: str
-    checksum: str
-    file_type: str | None = None
-    rows: int | None = None
-
-
-class BundleManifest(BaseModel):
-    """A versioned bundle of files with consumer-defined metadata."""
-
-    bundle_id: str
-    version: str
-    files: list[BundleFile]
-    metadata: dict[str, str] = Field(default_factory=dict)
-
-
-def parse_manifest(path: Path) -> BundleManifest:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return BundleManifest.model_validate(data)
-
-
-def validate_checksum(file_path: Path, expected: str) -> bool:
-    """True iff ``expected`` is ``sha256:<hex>`` and matches the file's digest."""
-    if not expected.startswith(_SHA256_PREFIX):
-        return False
-    actual = hashlib.sha256(file_path.read_bytes()).hexdigest()
-    return actual == expected[len(_SHA256_PREFIX) :]
 
 
 class ChunkRef(BaseModel):
