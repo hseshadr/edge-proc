@@ -57,7 +57,7 @@ asyncio.run(main())
 ```
 
 Swap `TaskKind.SEARCH` for `TaskKind.EMBED` (raw vectors) or `TaskKind.RANK` (hybrid
-BM25 + vector fusion).
+keyword + meaning-based ranking).
 
 ### …or from the CLI: `route`
 
@@ -65,7 +65,7 @@ Prefer the shell? Persist an index once, drop your `Task` in a JSON file, and `r
 the CLI loads the saved index, runs the task, and prints the result. The exit code mirrors
 success (`0` ok, `1` otherwise), so scripts can branch on it.
 
-First persist the catalog (a saved index is the FAISS file plus a small `state.json`):
+First persist the catalog (a saved index is the search-index file plus a small `state.json`):
 
 ```python
 # save_index.py

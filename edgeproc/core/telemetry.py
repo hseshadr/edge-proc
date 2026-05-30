@@ -11,6 +11,9 @@ from typing import Final
 
 from edgeproc.core.models import ResultEnvelope
 
+# Ring-buffer cap for BufferedSink: ~10k envelopes is a few MB of recent
+# telemetry — enough to inspect a burst, bounded so a long-running process
+# can't leak memory. Caller-overridable via BufferedSink(maxlen=...).
 DEFAULT_MAXLEN: Final[int] = 10_000
 
 
