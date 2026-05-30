@@ -1,9 +1,8 @@
-"""EdgeProcSettings reads deploy-time config from env / .env and fails closed on junk."""
+"""EdgeProcSettings reads deploy-time config from env / .env under the EDGEPROC_ prefix."""
 
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
 
 from edgeproc.core.settings import DEFAULT_MODEL, EdgeProcSettings
 
@@ -57,6 +56,14 @@ def test_hf_token_reads_the_unprefixed_ecosystem_variable(monkeypatch: pytest.Mo
     assert EdgeProcSettings(_env_file=None).hf_token == "hf_secret_value"  # noqa: S105
 
 
-def test_unknown_field_fails_closed() -> None:
-    with pytest.raises(ValidationError):
-        EdgeProcSettings(_env_file=None, totally_unknown="x")
+def test_ignores_host_app_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
+    # As a library, EdgeProc must coexist with a consumer's own .env: non-EDGEPROC_
+    # host vars (e.g. a DATABASE_URL / OPENROUTER_API_KEY) are ignored, not
+    # rejected — forbidding them would crash EdgeProcSettings() in any app with a
+    # populated .env. The EDGEPROC_ prefix already scopes what binds here.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/app")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-host-app-key")  # noqa: S105
+
+    settings = EdgeProcSettings(_env_file=None)
+
+    assert settings.model_name == DEFAULT_MODEL

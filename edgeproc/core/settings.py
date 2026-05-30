@@ -24,12 +24,19 @@ DEFAULT_MODEL: Final[str] = "sentence-transformers/all-MiniLM-L6-v2"
 
 
 class EdgeProcSettings(BaseSettings):
-    """EdgeProc runtime config. Unknown fields are rejected (fail closed)."""
+    """EdgeProc runtime config, scoped to the ``EDGEPROC_`` env prefix.
+
+    ``extra="ignore"``: as a *library*, EdgeProc must coexist with a host app's
+    own ``.env`` (e.g. a consumer's ``DATABASE_URL`` / ``OPENROUTER_API_KEY``).
+    The ``EDGEPROC_`` prefix already scopes which vars bind here, so non-prefixed
+    host keys are ignored rather than rejected — forbidding them would make any
+    consumer with a populated ``.env`` crash on ``EdgeProcSettings()``.
+    """
 
     model_config = SettingsConfigDict(
         env_prefix="EDGEPROC_",
         env_file=".env",
-        extra="forbid",
+        extra="ignore",
         protected_namespaces=(),
     )
 
