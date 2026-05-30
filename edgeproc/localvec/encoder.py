@@ -18,14 +18,28 @@ from edgeproc.core.settings import EdgeProcSettings
 
 @runtime_checkable
 class Encoder(Protocol):
-    """Turns text into L2-normalized float32 embeddings."""
+    """Turns text into L2-normalized float32 embeddings.
+
+    Encoding is L2-normalized float32 so inner product equals cosine similarity — the
+    FAISS ``IndexFlatIP`` the runtime builds depends on that normalization.
+    """
 
     @property
-    def dim(self) -> int: ...
+    def dim(self) -> int:
+        """Embedding dimensionality; an index built for this encoder must match it."""
+        ...
 
-    def encode_texts(self, texts: list[str]) -> NDArray[np.float32]: ...
+    def encode_texts(self, texts: list[str]) -> NDArray[np.float32]:
+        """Encode a batch of documents into one normalized row vector each.
 
-    def encode_query(self, query: str) -> NDArray[np.float32]: ...
+        RAISES (does not return an empty array) if the model exposes no embedding
+        dimension; the caller never silently indexes a malformed encoder.
+        """
+        ...
+
+    def encode_query(self, query: str) -> NDArray[np.float32]:
+        """Encode a single query string into one normalized vector (same space as docs)."""
+        ...
 
 
 class _HasEmbeddingDimension(Protocol):

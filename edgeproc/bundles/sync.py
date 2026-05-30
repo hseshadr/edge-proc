@@ -68,9 +68,9 @@ class MissingChunks(NamedTuple):
 
 def _missing_chunks(manifest: IndexManifest, store: CacheStore) -> MissingChunks:
     """Return chunks to fetch + reused count over the manifest's deduped chunk set."""
-    wanted = {ref.hash for entry in manifest.files for ref in entry.chunks}
-    missing = frozenset(h for h in wanted if not store.has_chunk(h))
-    return MissingChunks(to_fetch=missing, reused=len(wanted) - len(missing))
+    all_chunk_hashes = {ref.hash for entry in manifest.files for ref in entry.chunks}
+    missing = frozenset(h for h in all_chunk_hashes if not store.has_chunk(h))
+    return MissingChunks(to_fetch=missing, reused=len(all_chunk_hashes) - len(missing))
 
 
 def _fetch_missing(

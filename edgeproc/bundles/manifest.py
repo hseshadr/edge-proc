@@ -65,6 +65,10 @@ def canonical_bytes(model: BaseModel, *, exclude: set[str] | None = None) -> byt
 
     ``sort_keys`` sorts dict keys recursively but preserves list order, so a
     ``FileEntry.chunks`` sequence keeps its reassembly order.
+
+    CRITICAL: this serialization format is frozen by ``VersionPointer.manifest_hash``.
+    Any change (key order, separators, encoding) re-hashes every manifest and breaks
+    verification against all existing bundles — it must never change without a migration.
     """
     payload = model.model_dump(mode="json", exclude=exclude)
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(

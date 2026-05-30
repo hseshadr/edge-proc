@@ -30,14 +30,29 @@ class SignatureError(Exception):
     """Raised when a signature is absent, malformed, or does not verify."""
 
 
+# FUTURE: a Sigstore keyless verifier slots in behind these same Protocols (roadmap)
+# — a future implementer adds it with zero consumer change.
 @runtime_checkable
 class Signer(Protocol):
-    def sign(self, data: bytes) -> str: ...
+    """Produces a detached signature over canonical bytes."""
+
+    def sign(self, data: bytes) -> str:
+        """Sign ``data`` and return the detached signature as a base64 ``str``."""
+        ...
 
 
 @runtime_checkable
 class Verifier(Protocol):
-    def verify(self, data: bytes, signature: str) -> None: ...
+    """Fail-closed verifier over a detached, base64-encoded signature."""
+
+    def verify(self, data: bytes, signature: str) -> None:
+        """Return ``None`` iff ``signature`` (base64) authenticates ``data``.
+
+        RAISES :class:`SignatureError` on anything else — a bad/forged signature, a
+        wrong key, or a malformed (non-base64) string. It never returns a bool, so a
+        caller cannot accidentally treat a falsy non-None as "verified".
+        """
+        ...
 
 
 def generate_keypair() -> tuple[Ed25519PrivateKey, Ed25519PublicKey]:

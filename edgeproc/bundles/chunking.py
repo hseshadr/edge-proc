@@ -32,12 +32,17 @@ from typing import Final
 # cross-version sync. (Value = ASCII "edgeproc" as a 64-bit int.)
 _GEAR_SEED: Final[int] = 0x6564676570726F63
 
+# FROZEN on-wire contract: MIN/AVG/MAX define where boundaries land. Changing any of
+# them re-chunks every existing bundle and breaks dedup/sync against all published
+# constructs — never change without a migration (same rule as _GEAR_SEED).
 MIN_SIZE: Final[int] = 16 * 1024  # 16 KiB — no cut before this (casync profile)
 AVG_SIZE: Final[int] = 64 * 1024  # 64 KiB — target chunk size
 MAX_SIZE: Final[int] = 256 * 1024  # 256 KiB — forced cut here
 
 # Normalized-chunking masks: more 1-bits = harder to satisfy = bigger chunks.
 # 13 bits below average (strict), 11 bits above (loose); centred on log2(AVG)=16.
+# FROZEN reproducibility contract: the masks pick the same boundaries on every machine;
+# altering them breaks dedup against all existing bundles — never change without a migration.
 _MASK_S: Final[int] = 0x0003_5907_0353_0000  # 13 set bits
 _MASK_L: Final[int] = 0x0000_D900_4353_0000  # 11 set bits
 _MASK_64: Final[int] = (1 << 64) - 1

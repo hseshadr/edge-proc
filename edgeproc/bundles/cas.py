@@ -71,6 +71,8 @@ class FilesystemCacheStore:
 
     def __init__(self, root: Path) -> None:
         self._root = root
+        # FROZEN CAS layout contract: a producer's origin dir and a consumer's cache both
+        # address objects via these exact subdirs/names. Renaming any breaks existing stores.
         self._chunks = root / "chunks"
         self._manifests = root / "manifests"
         self._active = root / "active"

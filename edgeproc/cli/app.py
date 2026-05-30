@@ -89,7 +89,8 @@ def sync(
     read them by path. Exit 0 on success, 1 otherwise.
     """
     try:
-        # Lazy: the bundles substrate is an optional extra, not a core dependency.
+        # Imported lazily so the core install stays light: these belong to the optional
+        # `[bundles]` extra, not the core dependency set (hence the per-line PLC0415).
         from edgeproc.bundles.adapters import FilesystemAdapter, HttpAdapter  # noqa: PLC0415
         from edgeproc.bundles.cas import FilesystemCacheStore  # noqa: PLC0415
         from edgeproc.bundles.signing import Ed25519Verifier  # noqa: PLC0415
@@ -191,8 +192,10 @@ def _load_task(path: Path) -> Task:
 
 def _route_runtime(index_dir: Path, model: str | None, index_name: str) -> Runtime:
     try:
+        # Lazy: route belongs to the optional `[localvec]` extra, not the core deps.
         from edgeproc.localvec.loader import load_local_runtime  # noqa: PLC0415
-    except ImportError:  # pragma: no cover - only without the [localvec] extra
+    except ImportError:  # pragma: no cover - guards a partial install: route is unusable
+        # without the [localvec] extra, so we fail closed with an install hint, not a crash.
         _fail("install edge-proc[localvec] to use route")
     encoder = build_encoder(model)
     try:
@@ -272,6 +275,8 @@ def _run_sync(
         _fail(f"sync failed: {exc}")
     finally:
         if close:
+            # The FetchAdapter Protocol has no close(); only HttpAdapter does (it owns a
+            # pooled client). close is True only on the HTTP path, so this is safe.
             adapter.close()  # type: ignore[attr-defined]
 
 
@@ -281,7 +286,9 @@ def _materialize_active(store: CacheStore, out: Path) -> None:
     from edgeproc.bundles.sync import materialize_file  # noqa: PLC0415
 
     pointer = store.read_active()
-    if pointer is None:  # pragma: no cover - sync_index always promotes a pointer
+    if pointer is None:  # pragma: no cover
+        # Guards a future bug: sync_index always promotes an active pointer before we
+        # materialize, so a None here means that invariant broke — fail closed, never None-deref.
         _fail("no active pointer to materialize")
     manifest = IndexManifest.model_validate_json(store.get_manifest(pointer.manifest_hash))
     for entry in manifest.files:
@@ -301,11 +308,20 @@ def _render_sync(result: SyncResult, *, pretty: bool) -> str:
 
 
 def _load_signer(key: Path, signer_cls: type[Ed25519Signer]) -> Signer:
-    """Load a raw ed25519 private key into a ``Signer``; fail closed if it can't."""
+    """Load a raw ed25519 private key into a ``Signer``; fail closed if it can't.
+
+    Two distinct, actionable failures: a missing/unreadable key FILE (OSError) vs a
+    present-but-malformed key (ValueError from ``from_private_bytes`` — wrong length /
+    bad bytes). Splitting them tells the operator whether to fix the path or the key.
+    """
     try:
-        return signer_cls.from_private_bytes(key.read_bytes())
-    except (OSError, ValueError) as exc:
-        _fail(f"could not load signing key {key}: {exc}")
+        raw = key.read_bytes()
+    except OSError as exc:
+        _fail(f"could not read signing key {key}: {exc}")
+    try:
+        return signer_cls.from_private_bytes(raw)
+    except ValueError as exc:
+        _fail(f"malformed signing key {key}: {exc}")
 
 
 def _read_src(src: Path) -> dict[str, bytes]:

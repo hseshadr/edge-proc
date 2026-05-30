@@ -30,6 +30,8 @@ from shared_libs_python.vector_mgmt.core.types import (
     VectorEmbedding,
 )
 
+# FROZEN on-disk contract: a saved index dir is addressed by these exact filenames, so
+# load() can find a save()d index across versions. Renaming either breaks existing dirs.
 _INDEX_FILE: Final[str] = "index.faiss"
 _STATE_FILE: Final[str] = "state.json"
 

@@ -206,7 +206,35 @@ def test_cli_publish_missing_key_fails_closed(tmp_path: Path) -> None:
     )
     assert result.exit_code == 1
     assert "Traceback" not in result.stderr
+    assert "could not read signing key" in result.stderr  # missing FILE branch
     assert result.stderr.strip()  # an error message went to stderr
+
+
+def test_cli_publish_malformed_key_fails_closed(tmp_path: Path) -> None:
+    # A key file that EXISTS but holds the wrong number of bytes is malformed: it must
+    # give a distinct message from a missing/unreadable file (the two except branches).
+    src = _write_src(tmp_path / "src", {"a.bin": b"x"})
+    bad_key = tmp_path / "bad.key"
+    bad_key.write_bytes(b"not-a-32-byte-ed25519-key")
+    result = runner.invoke(
+        app,
+        [
+            "publish",
+            "--src",
+            str(src),
+            "--origin-dir",
+            str(tmp_path / "origin"),
+            "--key",
+            str(bad_key),
+            "--bundle-id",
+            "b",
+            "--version",
+            "1.0.0",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "Traceback" not in result.stderr
+    assert "malformed signing key" in result.stderr  # malformed-key branch
 
 
 def _fs_adapter() -> object:
