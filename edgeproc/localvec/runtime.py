@@ -20,6 +20,7 @@ from shared_libs_python.vector_mgmt.core.types import IndexConfig, VectorEmbeddi
 
 from edgeproc._version import __version__
 from edgeproc.core.models import (
+    DEFAULT_SIGNATURE_STATUS,
     CapabilityVerdict,
     JsonValue,
     PrivacyMode,
@@ -138,7 +139,9 @@ class LocalVecRuntime:
             privacy_mode=task.privacy_mode,
             confidence=1.0 if success else 0.0,
             latency_ms=(perf_counter() - start) * 1000.0,
-            provenance=Provenance(signature_status="unsigned", runtime_version=__version__),
+            provenance=Provenance(
+                signature_status=DEFAULT_SIGNATURE_STATUS, runtime_version=__version__
+            ),
             error=error,
         )
 

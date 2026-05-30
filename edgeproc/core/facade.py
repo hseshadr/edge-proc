@@ -8,7 +8,7 @@ register a runtime explicitly (e.g. ``EdgeProc(registry)`` with a configured
 from __future__ import annotations
 
 from edgeproc._version import __version__
-from edgeproc.core.models import Provenance, ResultEnvelope, Task
+from edgeproc.core.models import DEFAULT_SIGNATURE_STATUS, Provenance, ResultEnvelope, Task
 from edgeproc.core.protocols import Router, Runtime, TelemetrySink
 from edgeproc.core.registry import RuntimeRegistry
 from edgeproc.core.router import DefaultRouter
@@ -25,8 +25,9 @@ class EdgeProc:
         sink: TelemetrySink | None = None,
     ) -> None:
         self._registry = registry
-        # Explicit None checks: a sink/router may be falsy (e.g. an empty BufferedSink
-        # has __len__ == 0), so `x or default` would silently discard a real instance.
+        # Identity (`is not None`), never truthiness: a real but empty BufferedSink has
+        # __len__ == 0, so `x or default` would silently swap the caller's sink for the
+        # default and drop their telemetry. The None check guards that data-loss bug.
         self._router = router if router is not None else DefaultRouter()
         self._sink = sink if sink is not None else NullSink()
 
@@ -58,6 +59,8 @@ class EdgeProc:
             privacy_mode=task.privacy_mode,
             confidence=0.0,
             latency_ms=0.0,
-            provenance=Provenance(signature_status="unsigned", runtime_version=__version__),
+            provenance=Provenance(
+                signature_status=DEFAULT_SIGNATURE_STATUS, runtime_version=__version__
+            ),
             error="no_runtime_accepted",
         )

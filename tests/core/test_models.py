@@ -30,6 +30,37 @@ def test_task_applies_default_budgets() -> None:
     assert task.budget_memory_mb == 256
 
 
+def test_task_budget_defaults_come_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The default budget is sourced from EdgeProcSettings (one source of truth), not a
+    # bare literal on the model: an env override flows into a Task built without budgets.
+    monkeypatch.setenv("EDGEPROC_TASK_BUDGET_MS", "7777")
+    monkeypatch.setenv("EDGEPROC_TASK_BUDGET_MEMORY_MB", "333")
+
+    task = Task(kind=TaskKind.SEARCH, payload={}, privacy_mode=PrivacyMode.LOCAL_ONLY)
+
+    assert task.budget_ms == 7777
+    assert task.budget_memory_mb == 333
+
+
+def test_explicit_per_task_budget_overrides_the_settings_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A caller passing explicit budgets must always win over the settings default.
+    monkeypatch.setenv("EDGEPROC_TASK_BUDGET_MS", "7777")
+    monkeypatch.setenv("EDGEPROC_TASK_BUDGET_MEMORY_MB", "333")
+
+    task = Task(
+        kind=TaskKind.SEARCH,
+        payload={},
+        privacy_mode=PrivacyMode.LOCAL_ONLY,
+        budget_ms=11,
+        budget_memory_mb=22,
+    )
+
+    assert task.budget_ms == 11
+    assert task.budget_memory_mb == 22
+
+
 def test_task_capability_token_defaults_to_empty_v0_passthrough() -> None:
     task = Task(kind=TaskKind.EMBED, payload={}, privacy_mode=PrivacyMode.LOCAL_ONLY)
     assert task.capability_token == ""

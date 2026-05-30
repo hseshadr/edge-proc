@@ -8,9 +8,12 @@ A consumer hands EdgeProc a :class:`Task`; every runtime returns a
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Final
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
+
+from edgeproc.core.settings import EdgeProcSettings
 
 type JsonValue = str | int | float | bool | None | list[JsonValue] | dict[str, JsonValue]
 """JSON-shaped payload value. Deliberately not ``Any`` — payloads stay inspectable.
@@ -18,6 +21,20 @@ type JsonValue = str | int | float | bool | None | list[JsonValue] | dict[str, J
 A PEP 695 ``type`` alias (not a plain assignment) so Pydantic resolves the
 recursion lazily instead of blowing the schema builder's stack.
 """
+
+# Single source of truth for the unsigned-provenance marker, shared by every runtime
+# (facade + localvec) so the literal lives in exactly one place.
+DEFAULT_SIGNATURE_STATUS: Final[str] = "unsigned"
+
+
+def _default_budget_ms() -> int:
+    """Per-task time budget default, sourced from settings (read lazily, not at import)."""
+    return EdgeProcSettings().task_budget_ms
+
+
+def _default_budget_memory_mb() -> int:
+    """Per-task memory budget default, sourced from settings (read lazily)."""
+    return EdgeProcSettings().task_budget_memory_mb
 
 
 class PrivacyMode(StrEnum):
@@ -71,8 +88,9 @@ class Task(BaseModel):
     payload: dict[str, JsonValue]
     privacy_mode: PrivacyMode
     capability_token: str = ""
-    budget_ms: int = 5000
-    budget_memory_mb: int = 256
+    # Defaults flow from EdgeProcSettings (one source of truth); an explicit value still wins.
+    budget_ms: int = Field(default_factory=_default_budget_ms)
+    budget_memory_mb: int = Field(default_factory=_default_budget_memory_mb)
     path_signature: str | None = None
 
 

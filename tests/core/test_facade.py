@@ -6,6 +6,7 @@ import pytest
 
 from edgeproc.core.facade import EdgeProc
 from edgeproc.core.models import (
+    DEFAULT_SIGNATURE_STATUS,
     CapabilityVerdict,
     PrivacyMode,
     Provenance,
@@ -77,6 +78,8 @@ async def test_returns_failure_envelope_when_no_runtime_accepts() -> None:
     assert result.error == "no_runtime_accepted"
     assert result.request_id == task.request_id
     assert result.runtime_used == "none"
+    # Provenance status flows from the single shared constant, not a stray literal.
+    assert result.provenance.signature_status == DEFAULT_SIGNATURE_STATUS
 
 
 async def test_emits_the_failure_envelope_too() -> None:

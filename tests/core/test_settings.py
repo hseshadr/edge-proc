@@ -7,7 +7,15 @@ from pydantic import ValidationError
 
 from edgeproc.core.settings import DEFAULT_MODEL, EdgeProcSettings
 
-_VARS = ("EDGEPROC_MODEL_NAME", "EDGEPROC_DEFAULT_K", "EDGEPROC_HTTP_TIMEOUT", "HF_TOKEN")
+_VARS = (
+    "EDGEPROC_MODEL_NAME",
+    "EDGEPROC_DEFAULT_K",
+    "EDGEPROC_HTTP_TIMEOUT",
+    "EDGEPROC_TASK_BUDGET_MS",
+    "EDGEPROC_TASK_BUDGET_MEMORY_MB",
+    "EDGEPROC_RRF_K_WINDOW",
+    "HF_TOKEN",
+)
 
 
 def test_defaults_match_the_canonical_local_stack(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -20,18 +28,27 @@ def test_defaults_match_the_canonical_local_stack(monkeypatch: pytest.MonkeyPatc
     assert settings.hf_token is None
     assert settings.default_k == 10
     assert settings.http_timeout == 30.0
+    assert settings.task_budget_ms == 5000
+    assert settings.task_budget_memory_mb == 256
+    assert settings.rrf_k_window == 60
 
 
 def test_env_overrides_are_read_with_the_edgeproc_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("EDGEPROC_MODEL_NAME", "BAAI/bge-small-en")
     monkeypatch.setenv("EDGEPROC_DEFAULT_K", "5")
     monkeypatch.setenv("EDGEPROC_HTTP_TIMEOUT", "12.5")
+    monkeypatch.setenv("EDGEPROC_TASK_BUDGET_MS", "9000")
+    monkeypatch.setenv("EDGEPROC_TASK_BUDGET_MEMORY_MB", "512")
+    monkeypatch.setenv("EDGEPROC_RRF_K_WINDOW", "30")
 
     settings = EdgeProcSettings(_env_file=None)
 
     assert settings.model_name == "BAAI/bge-small-en"
     assert settings.default_k == 5
     assert settings.http_timeout == 12.5
+    assert settings.task_budget_ms == 9000
+    assert settings.task_budget_memory_mb == 512
+    assert settings.rrf_k_window == 30
 
 
 def test_hf_token_reads_the_unprefixed_ecosystem_variable(monkeypatch: pytest.MonkeyPatch) -> None:

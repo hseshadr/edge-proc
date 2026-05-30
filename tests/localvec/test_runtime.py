@@ -5,7 +5,13 @@ from __future__ import annotations
 import pytest
 from shared_libs_python.vector_mgmt.core.types import IndexConfig, VectorEmbedding
 
-from edgeproc.core.models import CapabilityVerdict, PrivacyMode, Task, TaskKind
+from edgeproc.core.models import (
+    DEFAULT_SIGNATURE_STATUS,
+    CapabilityVerdict,
+    PrivacyMode,
+    Task,
+    TaskKind,
+)
 from edgeproc.core.protocols import Runtime
 from edgeproc.localvec.faiss_index import FaissVectorIndex
 from edgeproc.localvec.runtime import LocalVecRuntime
@@ -63,6 +69,8 @@ async def test_embed_returns_one_vector_per_text() -> None:
     result = await runtime.execute(_task(TaskKind.EMBED, texts=["red shoes", "blue boots"]))
     assert result.success is True
     assert len(result.payload["embeddings"]) == 2
+    # The runtime stamps provenance from the single shared constant, not a stray literal.
+    assert result.provenance.signature_status == DEFAULT_SIGNATURE_STATUS
 
 
 async def test_from_texts_wires_a_search_ready_runtime() -> None:

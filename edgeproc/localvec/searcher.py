@@ -9,9 +9,16 @@ from __future__ import annotations
 
 from rank_bm25 import BM25Okapi
 
+from edgeproc.core.settings import EdgeProcSettings
+
 
 def _tokenize(text: str) -> list[str]:
     return text.lower().split()
+
+
+def _resolve_k(k: int | None) -> int:
+    # Default top-k flows from EdgeProcSettings (one source of truth, no second literal).
+    return EdgeProcSettings().default_k if k is None else k
 
 
 class KeywordSearcher:
@@ -27,9 +34,10 @@ class KeywordSearcher:
         bm25 = BM25Okapi(corpus) if corpus else BM25Okapi([[""]])
         return cls(bm25, list(ids))
 
-    def search(self, query: str, *, k: int = 10) -> list[tuple[str, float]]:
+    def search(self, query: str, *, k: int | None = None) -> list[tuple[str, float]]:
+        top_k = _resolve_k(k)
         if not query.strip() or not self._ids:
             return []
         scores = self._bm25.get_scores(_tokenize(query))
         ranked = sorted(enumerate(scores), key=lambda item: item[1], reverse=True)
-        return [(self._ids[idx], float(score)) for idx, score in ranked[:k] if score > 0]
+        return [(self._ids[idx], float(score)) for idx, score in ranked[:top_k] if score > 0]

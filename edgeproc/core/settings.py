@@ -37,5 +37,10 @@ class EdgeProcSettings(BaseSettings):
     hf_token: str | None = Field(default=None, validation_alias="HF_TOKEN")
     default_k: int = 10
     http_timeout: float = 30.0
+    # Per-task resource budgets; the source of truth for the Task model's defaults.
+    task_budget_ms: int = 5000
+    task_budget_memory_mb: int = 256
+    # RRF rank-window constant — bigger k flattens the score curve (fewer top-rank wins).
+    rrf_k_window: int = 60
     # Pinned TUF-style trust-root public key; a `sync` with none set is refused (fail-closed).
     trust_root_pubkey_path: Path | None = None
