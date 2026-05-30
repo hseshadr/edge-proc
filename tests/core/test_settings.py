@@ -62,7 +62,7 @@ def test_ignores_host_app_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     # rejected — forbidding them would crash EdgeProcSettings() in any app with a
     # populated .env. The EDGEPROC_ prefix already scopes what binds here.
     monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/app")
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-host-app-key")  # noqa: S105
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-host-app-key")
 
     settings = EdgeProcSettings(_env_file=None)
 
