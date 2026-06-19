@@ -11,39 +11,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # edgeproc depends on shared-libs-python via a local path source
-      # (../shared-libs-python). Check the sibling out INSIDE the workspace (.deps/)
-      # so actions/checkout path restrictions are satisfied, then patch the uv path
-      # source to point there before `uv sync`. Local dev is unaffected (pyproject is
-      # patched only on the runner; .deps/ is gitignored so CI never commits it).
-      #
-      # REQUIRED: a repo secret PORTFOLIO_PAT — a PAT with Contents:read on
-      # hseshadr/shared-libs-python. The default GITHUB_TOKEN cannot read other
-      # private repos. Settings -> Secrets and variables -> Actions -> New secret.
-      - name: Checkout shared-libs-python (private sibling)
-        uses: actions/checkout@v5
-        with:
-          repository: hseshadr/shared-libs-python
-          token: ${{ secrets.PORTFOLIO_PAT }}
-          path: .deps/shared-libs-python
-
-      - name: Patch uv path source for CI layout
-        # pyproject.toml has: shared-libs-python = { path = "../shared-libs-python", ... }
-        # In CI the sibling lives at .deps/shared-libs-python (inside $GITHUB_WORKSPACE).
-        run: |
-          python3 - <<'PYEOF'
-          import re, pathlib
-          p = pathlib.Path("pyproject.toml")
-          txt = p.read_text()
-          txt = re.sub(
-              r'(shared-libs-python\s*=\s*\{[^}]*path\s*=\s*")[^"]*(")',
-              r'\g<1>.deps/shared-libs-python\g<2>',
-              txt,
-          )
-          p.write_text(txt)
-          print("Patched: shared-libs-python path -> .deps/shared-libs-python")
-          PYEOF
-
+      # shared-libs-python is pulled from public GitHub via the git source pinned in
+      # pyproject.toml — exactly what an external cloner gets. No private-repo token,
+      # no path patching: CI builds the same way `git clone … && uv sync` does.
       - name: Install uv
         # Pin the exact tag: the maintainers have not published a floating `v8`
         # major alias yet (only v8.0.0 / v8.1.0 exist), so `@v8` fails to resolve.

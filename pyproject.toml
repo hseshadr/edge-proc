@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "edge-proc"
-version = "0.1.0"
+version = "0.1.1"
 description = "AI-native local execution substrate: a pure deterministic router over pluggable runtimes, a FAISS vector runtime, and a signed bundle/sync substrate. The foundational local-execution Lego."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -61,8 +61,13 @@ Repository = "https://github.com/hseshadr/edge-proc"
 Issues = "https://github.com/hseshadr/edge-proc/issues"
 
 [tool.uv.sources]
-# Local editable for development; published consumers resolve the version pin above.
-shared-libs-python = { path = "../shared-libs-python", editable = true }
+# Open-source onboarding: clone ONLY this repo and `uv sync` — shared-libs-python
+# is pulled from public GitHub, pinned to a release tag (it is not on PyPI).
+shared-libs-python = { git = "https://github.com/hseshadr/shared-libs-python.git", tag = "v0.1.2" }
+
+# Co-developing shared-libs-python locally? Clone it next to this repo and swap the
+# line above for a path source (uncomment):
+#   shared-libs-python = { path = "../shared-libs-python", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["edgeproc"]

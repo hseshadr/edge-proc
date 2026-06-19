@@ -2,6 +2,20 @@
 
 All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://semver.org).
 
+## 0.1.1 — 2026-06-19
+
+Public open-source release (MIT). Part of the `edge-reco → edge-proc →
+shared-libs-python` stack going public together; live demo at https://edge-reco.com.
+
+- **Clone-and-go onboarding.** `shared-libs-python` is now pulled from public GitHub
+  via a git source pinned to a tag (`[tool.uv.sources]`), so `git clone … && uv sync`
+  works with no sibling checkout. A commented path-source override remains for local
+  co-development.
+- **CI simplified.** Dropped the private-sibling checkout + path-patch steps and the
+  `PORTFOLIO_PAT` secret — CI now builds exactly as an external cloner does.
+- **Docs.** README sharpened to lead with the substrate value proposition (edge compute
+  cost, CDN-scale, offline resilience) and cross-link the three-repo stack.
+
 ## 0.1.0 — 2026-05-28
 
 First public release: the AI-native local execution substrate as a library + CLI.

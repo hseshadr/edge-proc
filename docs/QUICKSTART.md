@@ -15,7 +15,7 @@ git clone https://github.com/hseshadr/edge-proc.git
 cd edge-proc
 
 uv sync --all-extras    # core + [localvec] + [bundles] + dev tooling
-uv run poe gate         # lint + format-check + mypy strict + Radon Grade A + pytest (≥99% cov)
+uv run poe gate         # lint + format-check + mypy strict + Radon Grade A + pytest (≥90% cov)
 ```
 
 `poe gate` is the same set of checks CI runs. If it passes locally, CI passes.
