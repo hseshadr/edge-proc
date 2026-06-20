@@ -384,7 +384,7 @@ nvtx = [
 
 [[package]]
 name = "edge-proc"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
@@ -429,7 +429,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.5" },
     { name = "rank-bm25", marker = "extra == 'localvec'", specifier = ">=0.2" },
     { name = "sentence-transformers", marker = "extra == 'localvec'", specifier = ">=3.3" },
-    { name = "shared-libs-python", editable = "../shared-libs-python" },
+    { name = "shared-libs-python", git = "https://github.com/hseshadr/shared-libs-python.git?tag=v0.1.2" },
     { name = "structlog", marker = "extra == 'bundles'", specifier = ">=24.4" },
     { name = "typer", specifier = ">=0.15" },
     { name = "zstandard", marker = "extra == 'bundles'", specifier = ">=0.25" },
@@ -1539,39 +1539,10 @@ wheels = [
 
 [[package]]
 name = "shared-libs-python"
-version = "0.1.1"
-source = { editable = "../shared-libs-python" }
+version = "0.1.2"
+source = { git = "https://github.com/hseshadr/shared-libs-python.git?tag=v0.1.2#4f2d4aae6886341e13718011eb2ef93006329ad8" }
 dependencies = [
     { name = "pydantic" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.7.0" },
-    { name = "numpy", marker = "extra == 'pgvector'", specifier = ">=1.26.0" },
-    { name = "pgvector", marker = "extra == 'pgvector'", specifier = ">=0.2.4" },
-    { name = "poethepoet", marker = "extra == 'dev'", specifier = ">=0.30.0" },
-    { name = "pydantic", specifier = ">=2.5.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.3" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.1" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.1.0" },
-    { name = "radon", marker = "extra == 'dev'", specifier = ">=6.0.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.6" },
-    { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'pgvector'", specifier = ">=2.0.23" },
-    { name = "xenon", marker = "extra == 'dev'", specifier = ">=0.9.0" },
-]
-provides-extras = ["pgvector", "dev"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "mypy", specifier = ">=1.7.0" },
-    { name = "poethepoet", specifier = ">=0.30.0" },
-    { name = "pytest", specifier = ">=7.4.3" },
-    { name = "pytest-asyncio", specifier = ">=0.21.1" },
-    { name = "pytest-cov", specifier = ">=4.1.0" },
-    { name = "radon", specifier = ">=6.0.0" },
-    { name = "ruff", specifier = ">=0.1.6" },
-    { name = "xenon", specifier = ">=0.9.0" },
 ]
 
 [[package]]
