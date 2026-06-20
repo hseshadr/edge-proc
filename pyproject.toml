@@ -137,8 +137,9 @@ test = "pytest"
 # `gate` mirrors CI exactly (lint + format-check + typecheck + complexity + test).
 gate = ["lint", "fmt-check", "typecheck", "complexity", "test"]
 
-# shared-libs-python is installed editable via a path-only .pth entry that mypy
-# does not read, so resolve the sibling's source root and put it on MYPYPATH.
-# Works in both layouts: local (../shared-libs-python) and CI (.deps/...).
+# shared-libs-python now installs from a git source (or a plain path override) into
+# site-packages, so it's on the normal import path and mypy resolves it directly —
+# no MYPYPATH needed. (mypy refuses a MYPYPATH that points into site-packages, which
+# is exactly what the old __file__-derived dance produced under a non-editable install.)
 [tool.poe.tasks.typecheck]
-shell = 'MYPYPATH=$(python -c "import os, shared_libs_python as s; print(os.path.dirname(os.path.dirname(s.__file__)))") mypy --strict edgeproc/'
+cmd = "mypy --strict edgeproc/"
