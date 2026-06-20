@@ -13,6 +13,15 @@ coverage.json
 .mypy_cache/
 .DS_Store
 .env
+
+# Signing key material — defense-in-depth. `edgeproc keygen` writes a real
+# private.key; never let one be committed. (Public verification keys, when shipped,
+# live under examples/ and are added explicitly.)
+private.key
+*.key
+*.pem
+keys/
+
 .deps/
 
 # Serena MCP tool scratch
