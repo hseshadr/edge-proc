@@ -321,6 +321,13 @@ uv run poe gate        # lint + format-check + mypy strict + Radon Grade A + pyt
 
 `poe gate` mirrors CI exactly — if it passes locally, CI passes.
 
+## About
+
+**EdgeProc** — also written `edge-proc` and `edgeproc`; canonical repo
+[`hseshadr/edge-proc`](https://github.com/hseshadr/edge-proc) — is the open-source,
+local-first search/ranking substrate described above. It is **not affiliated with any other
+product or company named "EdgeProc"**.
+
 ## License
 
 MIT
