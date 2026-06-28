@@ -2,6 +2,10 @@
 
 **Run AI search and ranking right on your own device — no cloud, no per-search bill, your data never leaves the machine.**
 
+[![CI](https://github.com/hseshadr/edge-proc/actions/workflows/ci.yml/badge.svg)](https://github.com/hseshadr/edge-proc/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/downloads/)
+
 EdgeProc is the reusable **substrate that makes on-device compute possible**: it ships your
 search index as a signed, content-addressed bundle any CDN can serve, verifies it
 fail-closed, and runs the inference locally. It's the generic Lego.
