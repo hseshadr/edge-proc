@@ -6,15 +6,6 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/downloads/)
 
-EdgeProc is the reusable **substrate that makes on-device compute possible**: it ships your
-search index as a signed, content-addressed bundle any CDN can serve, verifies it
-fail-closed, and runs the inference locally. It's the generic Lego.
-[**edge-reco**](https://github.com/hseshadr/edge-reco) is the reference product built on it —
-a full search + recommendation engine running entirely in the browser
-([live demo](https://edge-reco.com)). EdgeProc itself builds on
-[**shared-libs-python**](https://github.com/hseshadr/shared-libs-python), the
-vector-partitioning protocol its FAISS runtime implements.
-
 ## What is this? (plain version)
 
 Most apps that "search" or "recommend" things quietly ship your data off to a company's
@@ -30,6 +21,16 @@ It also handles keeping that on-device search **up to date**: it can safely down
 index files over the internet and check, with cryptography, that nobody tampered with them
 along the way. Think of it like an app store that verifies the signature on an update
 before installing it — except for your search index.
+
+## Where it fits
+
+EdgeProc is the reusable **substrate** that makes on-device compute possible: it ships your
+search index as a signed, content-addressed bundle any CDN can serve, verifies it fail-closed,
+and runs the inference locally — the generic Lego other products build on.
+[**edge-reco**](https://github.com/hseshadr/edge-reco) is the reference product built on it — a
+full search + recommendation engine running entirely in the browser ([live demo](https://edge-reco.com)).
+EdgeProc itself builds on [**shared-libs-python**](https://github.com/hseshadr/shared-libs-python),
+the vector-partitioning protocol its FAISS runtime implements.
 
 ## What you'd use it for
 
@@ -320,6 +321,13 @@ uv run poe gate        # lint + format-check + mypy strict + Radon Grade A + pyt
 ```
 
 `poe gate` mirrors CI exactly — if it passes locally, CI passes.
+
+## About
+
+**EdgeProc** — also written `edge-proc` and `edgeproc`; canonical repo
+[`hseshadr/edge-proc`](https://github.com/hseshadr/edge-proc) — is the open-source,
+local-first search/ranking substrate described above. It is **not affiliated with any other
+product or company named "EdgeProc"**.
 
 ## License
 
