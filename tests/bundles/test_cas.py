@@ -105,6 +105,29 @@ def test_get_chunk_fail_closed_on_hash_mismatch(tmp_path: Path) -> None:
         store.get_chunk(chunk_hash)
 
 
+def test_get_chunk_rejects_decompression_bomb(tmp_path: Path) -> None:
+    # A tiny zstd file whose plaintext explodes far past the store's cap is a
+    # decompression bomb: it must be refused fail-closed, never inflated into memory.
+    store = FilesystemCacheStore(tmp_path, max_decompressed_bytes=1024)
+    bomb_plaintext = b"\x00" * (1024 * 1024)  # 1 MiB of zeros → tiny zstd, 1000x the cap
+    chunk_hash = _chunk_hash(bomb_plaintext)  # address it by its real content hash
+    on_disk = tmp_path / "chunks" / chunk_hash[:2] / chunk_hash
+    on_disk.parent.mkdir(parents=True, exist_ok=True)
+    on_disk.write_bytes(zstandard.compress(bomb_plaintext))
+    with pytest.raises(IntegrityError, match="max decompressed size"):
+        store.get_chunk(chunk_hash)
+
+
+def test_put_chunk_compressed_rejects_decompression_bomb(tmp_path: Path) -> None:
+    # The network-facing ingest path must also refuse a bomb — and leave nothing on disk.
+    store = FilesystemCacheStore(tmp_path, max_decompressed_bytes=1024)
+    bomb_plaintext = b"\x00" * (1024 * 1024)
+    chunk_hash = _chunk_hash(bomb_plaintext)
+    with pytest.raises(IntegrityError):
+        store.put_chunk_compressed(chunk_hash, zstandard.compress(bomb_plaintext))
+    assert store.has_chunk(chunk_hash) is False  # fail-closed cleanup
+
+
 def test_manifest_round_trip_and_fail_closed(tmp_path: Path) -> None:
     store = _store(tmp_path)
     manifest = _manifest_for(store, b"a" * 32, b"b" * 32)

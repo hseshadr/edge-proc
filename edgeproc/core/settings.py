@@ -44,6 +44,12 @@ class EdgeProcSettings(BaseSettings):
     hf_token: str | None = Field(default=None, validation_alias="HF_TOKEN")
     default_k: int = 10
     http_timeout: float = 30.0
+    # Fail-closed resource ceilings for the sync substrate (bomb / unbounded-read defense).
+    # A single chunk's plaintext is <=256 KiB (chunker MAX_SIZE), so 64 MiB is huge headroom
+    # that never rejects a legit chunk yet refuses a zstd bomb before it exhausts memory.
+    max_decompressed_bytes: int = 64 * 1024 * 1024
+    # A single HTTP fetch (pointer/manifest/chunk); 256 MiB bounds a hostile origin's body.
+    max_fetch_bytes: int = 256 * 1024 * 1024
     # Per-task resource budgets; the source of truth for the Task model's defaults.
     task_budget_ms: int = 5000
     task_budget_memory_mb: int = 256

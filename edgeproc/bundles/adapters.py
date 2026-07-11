@@ -16,6 +16,14 @@ import httpx
 from edgeproc.core.settings import EdgeProcSettings
 
 
+class ResponseTooLargeError(httpx.HTTPError):
+    """An origin returned a body larger than the configured cap (fail-closed).
+
+    Subclasses ``httpx.HTTPError`` so every existing fetch-failure handler already
+    catches it — an oversized body is just another way the fetch failed.
+    """
+
+
 @runtime_checkable
 class FetchAdapter(Protocol):
     """Fetches opaque bytes by URL — pointer, manifest, and chunk all share this seam."""
@@ -40,9 +48,15 @@ class HttpAdapter:
     """
 
     def __init__(
-        self, timeout: float | None = None, transport: httpx.BaseTransport | None = None
+        self,
+        timeout: float | None = None,
+        transport: httpx.BaseTransport | None = None,
+        *,
+        max_bytes: int | None = None,
     ) -> None:
-        self._timeout = timeout if timeout is not None else EdgeProcSettings().http_timeout
+        settings = EdgeProcSettings()
+        self._timeout = timeout if timeout is not None else settings.http_timeout
+        self._max_bytes = max_bytes if max_bytes is not None else settings.max_fetch_bytes
         self._transport = transport
         self._client: httpx.Client | None = None
 
@@ -68,6 +82,15 @@ class HttpAdapter:
         self.close()
 
     def fetch_bytes(self, url: str) -> bytes:
-        response = self._get_client().get(url)
-        response.raise_for_status()
-        return response.content
+        with self._get_client().stream("GET", url) as response:
+            response.raise_for_status()
+            return self._read_capped(response)
+
+    def _read_capped(self, response: httpx.Response) -> bytes:
+        """Buffer the streamed body, refusing anything past ``max_bytes`` (fail-closed)."""
+        buffer = bytearray()
+        for chunk in response.iter_bytes():
+            buffer.extend(chunk)
+            if len(buffer) > self._max_bytes:
+                raise ResponseTooLargeError(f"response body exceeds {self._max_bytes}-byte cap")
+        return bytes(buffer)

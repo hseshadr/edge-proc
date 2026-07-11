@@ -31,6 +31,7 @@ from typing import Protocol, runtime_checkable
 import zstandard
 
 from edgeproc.bundles.manifest import IndexManifest, VersionPointer, canonical_bytes
+from edgeproc.core.settings import EdgeProcSettings
 
 
 class IntegrityError(Exception):
@@ -69,7 +70,7 @@ def _atomic_write(target: Path, data: bytes) -> None:
 class FilesystemCacheStore:
     """Filesystem ``CacheStore``: ``chunks/<aa>/<hash>``, ``manifests/<hash>``, ``active``."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, max_decompressed_bytes: int | None = None) -> None:
         self._root = root
         # FROZEN CAS layout contract: a producer's origin dir and a consumer's cache both
         # address objects via these exact subdirs/names. Renaming any breaks existing stores.
@@ -78,6 +79,12 @@ class FilesystemCacheStore:
         self._active = root / "active"
         self._chunks.mkdir(parents=True, exist_ok=True)
         self._manifests.mkdir(parents=True, exist_ok=True)
+        # Decompression-bomb ceiling: a chunk that inflates past this is refused fail-closed.
+        self._max_decompressed_bytes = (
+            max_decompressed_bytes
+            if max_decompressed_bytes is not None
+            else EdgeProcSettings().max_decompressed_bytes
+        )
 
     @property
     def root(self) -> Path:
@@ -114,14 +121,17 @@ class FilesystemCacheStore:
 
     def _verify_or_remove(self, path: Path, chunk_hash: str) -> None:
         try:
-            if _sha256(_decompress(path.read_bytes())) != chunk_hash:
+            plaintext = _decompress(path.read_bytes(), self._max_decompressed_bytes)
+            if _sha256(plaintext) != chunk_hash:
                 raise IntegrityError(f"fetched chunk {chunk_hash} failed content-address check")
         except IntegrityError:
             path.unlink(missing_ok=True)
             raise
 
     def get_chunk(self, chunk_hash: str) -> bytes:
-        plaintext = _decompress(self._chunk_path(chunk_hash).read_bytes())
+        plaintext = _decompress(
+            self._chunk_path(chunk_hash).read_bytes(), self._max_decompressed_bytes
+        )
         if _sha256(plaintext) != chunk_hash:
             raise IntegrityError(f"chunk {chunk_hash} failed content-address check")
         return plaintext
@@ -177,8 +187,19 @@ class FilesystemCacheStore:
         return removed
 
 
-def _decompress(stored: bytes) -> bytes:
+def _decompress(stored: bytes, max_output_size: int) -> bytes:
+    """Decompress a stored chunk, refusing a decompression bomb (fail-closed).
+
+    Streams at most ``max_output_size`` bytes rather than trusting the frame's
+    (attacker-controlled) content-size header, so a small file that inflates past the
+    cap is rejected before it is ever materialized into memory.
+    """
+    decompressor = zstandard.ZstdDecompressor()
     try:
-        return zstandard.decompress(stored)
+        with decompressor.stream_reader(stored) as reader:
+            plaintext = reader.read(max_output_size + 1)
     except zstandard.ZstdError as exc:
         raise IntegrityError("stored chunk failed to decompress") from exc
+    if len(plaintext) > max_output_size:
+        raise IntegrityError("stored chunk exceeds max decompressed size")
+    return plaintext

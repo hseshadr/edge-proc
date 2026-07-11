@@ -193,6 +193,20 @@ def test_http_adapter_fetch_bytes_reuses_single_client() -> None:
     assert len(calls) == 2
 
 
+def test_http_adapter_rejects_oversized_body() -> None:
+    # A malicious/broken origin streaming a body past the cap must be refused fail-closed,
+    # never buffered whole into memory (unbounded-read DoS defense).
+    from edgeproc.bundles.adapters import ResponseTooLargeError  # noqa: PLC0415
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"x" * 10_000)
+
+    adapter = HttpAdapter(transport=httpx.MockTransport(handler), max_bytes=1024)
+    with pytest.raises(ResponseTooLargeError):
+        adapter.fetch_bytes("https://cdn.example/chunk/huge")
+    adapter.close()
+
+
 def test_http_adapter_context_manager_closes_client() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=b"ok")
