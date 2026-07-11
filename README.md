@@ -291,7 +291,10 @@ module map — see [**docs/ARCHITECTURE.md**](docs/ARCHITECTURE.md) (with d2 dia
 
 **Roadmap — not built yet** (kept as Protocol seams, not in v0):
 
-- A Wasm-3.0 deterministic kernel for sandboxed, portable runtimes — *roadmap, not built yet.*
+- **First-party WASM kernel v0** — one deterministic hot path (chunk hash/verify, BM25, or
+  rerank math), Rust→wasm32, running identically in the browser and in Python via wasmtime,
+  filling the `CUSTOM_WASM` seam — *roadmap, not built yet; full definition of done in
+  [ROADMAP.md](ROADMAP.md).*
 - Biscuit capability tokens for fine-grained, attenuable authorization — *roadmap, not built yet.*
 - Sigstore keyless bundle signing as an alternative to pinned ed25519 keys — *roadmap, not built yet.*
 

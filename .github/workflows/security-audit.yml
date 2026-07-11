@@ -1,0 +1,40 @@
+# Weekly pip-audit over the locked dependency set (house standard §4).
+#
+# Deliberately its own workflow, not a CI step: new CVEs appear against unchanged
+# code, so this must run on a schedule — and a known-unfixable advisory must not
+# mask real code regressions in the main gate.
+# A red scheduled run counts as a red repo — check `gh run list` explicitly.
+name: Security audit
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC — advisories move without commits
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pip-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        # No floating v8 tag exists for setup-uv — full version pin required.
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          version: "latest"
+
+      - name: Export locked dependencies
+        run: uv export --frozen --all-extras --no-emit-project --no-hashes -o requirements-audit.txt
+
+      # --disable-pip --no-deps: audit the pinned export directly, no venv.
+      # Safe because uv export pins the full transitive set from uv.lock.
+      - name: Audit dependencies for known vulnerabilities
+        run: uvx pip-audit -r requirements-audit.txt --disable-pip --no-deps
