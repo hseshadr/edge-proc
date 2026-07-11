@@ -152,6 +152,71 @@ def test_promote_and_read_active_swaps_to_newest(tmp_path: Path) -> None:
     assert store.read_active() == p2
 
 
+def test_promote_refuses_rollback_to_older_version(tmp_path: Path) -> None:
+    # Anti-rollback: once a NEWER version is active, a validly-signed but OLDER pointer
+    # must be refused — an attacker replaying a stale `/latest` cannot downgrade a client.
+    from edgeproc.bundles.cas import RollbackError  # noqa: PLC0415
+
+    store = _store(tmp_path)
+    newer = _manifest_for(store, b"new" * 16)
+    older = _manifest_for(store, b"old" * 16)
+    new_pointer = VersionPointer(
+        manifest_hash=store.put_manifest(canonical_bytes(newer)), version="2.0.0", signature="sig"
+    )
+    old_pointer = VersionPointer(
+        manifest_hash=store.put_manifest(canonical_bytes(older)), version="1.0.0", signature="sig"
+    )
+    store.promote(new_pointer)
+    with pytest.raises(RollbackError):
+        store.promote(old_pointer)
+    assert store.read_active() == new_pointer  # the downgrade never took effect
+
+
+def test_promote_allows_equal_and_forward_versions(tmp_path: Path) -> None:
+    # The guard must reject ONLY a provable downgrade: an equal-version re-publish and a
+    # forward bump are both legitimate and must still promote (covenant: never reject valid).
+    store = _store(tmp_path)
+    same_a = _manifest_for(store, b"a" * 16)
+    same_b = _manifest_for(store, b"b" * 16)
+    p_a = VersionPointer(
+        manifest_hash=store.put_manifest(canonical_bytes(same_a)), version="1.0.0", signature="s"
+    )
+    p_b = VersionPointer(
+        manifest_hash=store.put_manifest(canonical_bytes(same_b)), version="1.0.0", signature="s"
+    )
+    forward = _manifest_for(store, b"c" * 16)
+    p_c = VersionPointer(
+        manifest_hash=store.put_manifest(canonical_bytes(forward)), version="1.0.1", signature="s"
+    )
+    store.promote(p_a)
+    store.promote(p_b)  # equal version, different content → allowed
+    assert store.read_active() == p_b
+    store.promote(p_c)  # forward bump → allowed
+    assert store.read_active() == p_c
+
+
+def test_promote_allows_unparseable_version_covenant(tmp_path: Path) -> None:
+    # Covenant: the anti-rollback guard must NEVER reject a validly-signed bundle. When a
+    # version string is not PEP 440, there is nothing to compare, so a downgrade cannot be
+    # PROVEN — the promote must still succeed (fail-OPEN), never fail-closed on the guard.
+    store = _store(tmp_path)
+    active = _manifest_for(store, b"act" * 16)
+    incoming = _manifest_for(store, b"inc" * 16)
+    active_ptr = VersionPointer(
+        manifest_hash=store.put_manifest(canonical_bytes(active)),
+        version="2.0.0",
+        signature="s",
+    )
+    weird_ptr = VersionPointer(
+        manifest_hash=store.put_manifest(canonical_bytes(incoming)),
+        version="not-a-semver",
+        signature="s",
+    )
+    store.promote(active_ptr)
+    store.promote(weird_ptr)  # unparseable version → cannot prove downgrade → allowed
+    assert store.read_active() == weird_ptr
+
+
 def test_promote_crash_safety_keeps_old_pointer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

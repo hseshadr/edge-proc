@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 import zstandard
+from packaging.version import InvalidVersion, Version
 
 from edgeproc.bundles.manifest import IndexManifest, VersionPointer, canonical_bytes
 from edgeproc.core.settings import EdgeProcSettings
@@ -36,6 +37,14 @@ from edgeproc.core.settings import EdgeProcSettings
 
 class IntegrityError(Exception):
     """A stored object failed its content-address / decompress check (fail-closed)."""
+
+
+class RollbackError(IntegrityError):
+    """A promote would downgrade the active pointer to an OLDER version (fail-closed).
+
+    Subclasses :class:`IntegrityError` — an anti-rollback violation is a trust-boundary
+    failure, so every existing ``IntegrityError`` handler already refuses it.
+    """
 
 
 @runtime_checkable
@@ -153,7 +162,23 @@ class FilesystemCacheStore:
         return VersionPointer.model_validate_json(self._active.read_bytes())
 
     def promote(self, pointer: VersionPointer) -> None:
+        self._reject_rollback(pointer)
         _atomic_write(self._active, pointer.model_dump_json().encode("utf-8"))
+
+    def _reject_rollback(self, pointer: VersionPointer) -> None:
+        """Refuse a promote whose version is provably OLDER than the active one.
+
+        Anti-rollback: a validly-signed but stale pointer (a replayed old ``/latest``)
+        must not downgrade a client that already promoted a newer version. Only a
+        *provable* downgrade is refused; an equal/newer version, a first promote, or a
+        version string neither side can parse is allowed — so no already-valid, signed
+        bundle is ever rejected.
+        """
+        active = self.read_active()
+        if active is not None and _is_downgrade(pointer.version, active.version):
+            raise RollbackError(
+                f"refusing rollback: {pointer.version} is older than active {active.version}"
+            )
 
     def gc(self) -> int:
         active = self.read_active()
@@ -185,6 +210,18 @@ class FilesystemCacheStore:
                 path.unlink()
                 removed += 1
         return removed
+
+
+def _is_downgrade(incoming: str, active: str) -> bool:
+    """True iff ``incoming`` is a provably-older version than ``active`` (PEP 440).
+
+    Fail-open on unparseable versions: if either side is not PEP 440, we cannot prove a
+    downgrade, so we do NOT reject — the covenant forbids rejecting a valid signed bundle.
+    """
+    try:
+        return Version(incoming) < Version(active)
+    except InvalidVersion:
+        return False
 
 
 def _decompress(stored: bytes, max_output_size: int) -> bytes:
