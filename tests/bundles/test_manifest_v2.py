@@ -20,6 +20,29 @@ from edgeproc.bundles.manifest import (
 )
 
 
+@pytest.mark.parametrize(
+    "bad_path",
+    [
+        "../escape.txt",
+        "a/b/../../../etc/passwd",
+        "/etc/passwd",
+        "a\\..\\evil",
+        "",
+    ],
+)
+def test_file_entry_rejects_unsafe_paths(bad_path: str) -> None:
+    # A FileEntry whose path could escape its output root must never parse: this
+    # stops a malformed/compromised origin's traversal path at the model boundary,
+    # before any consumer joins it to a directory.
+    with pytest.raises(ValidationError):
+        FileEntry(path=bad_path, file_type=None, size=0, file_sha256="00" * 32, chunks=[])
+
+
+def test_file_entry_accepts_plain_relative_path() -> None:
+    entry = FileEntry(path="sub/dir/index.faiss", size=0, file_sha256="00" * 32, chunks=[])
+    assert entry.path == "sub/dir/index.faiss"
+
+
 def _manifest() -> IndexManifest:
     return IndexManifest(
         bundle_id="products-2026-05-27",

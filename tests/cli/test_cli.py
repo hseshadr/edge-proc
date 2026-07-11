@@ -145,3 +145,24 @@ def test_route_missing_index_dir_fails_closed(
 
     assert result.exit_code == 1
     assert '"success"' not in result.stdout
+
+
+def test_materialize_refuses_traversal_before_writing(tmp_path: Path) -> None:
+    # Defense-in-depth: even if a manifest with a traversal path somehow reached the
+    # write loop (bypassing model validation via model_construct here), the loop must
+    # refuse it BEFORE any write — nothing lands outside the output dir.
+    from edgeproc.bundles.containment import UnsafePathError  # noqa: PLC0415
+    from edgeproc.bundles.manifest import FileEntry, IndexManifest  # noqa: PLC0415
+
+    out = tmp_path / "out"
+    evil = FileEntry.model_construct(
+        path="../evil.txt", file_type=None, size=0, file_sha256="00" * 32, chunks=[]
+    )
+    manifest = IndexManifest.model_construct(
+        bundle_id="b", version="1.0.0", files=[evil], metadata={}
+    )
+
+    with pytest.raises(UnsafePathError):
+        _cli_app_module._materialize_files(object(), manifest, out)
+
+    assert not (tmp_path / "evil.txt").exists()

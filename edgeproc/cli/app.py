@@ -25,7 +25,7 @@ from edgeproc.core.registry import RuntimeRegistry
 if TYPE_CHECKING:
     from edgeproc.bundles.adapters import FetchAdapter
     from edgeproc.bundles.cas import CacheStore
-    from edgeproc.bundles.manifest import VersionPointer
+    from edgeproc.bundles.manifest import IndexManifest, VersionPointer
     from edgeproc.bundles.signing import Ed25519Signer, Signer, Verifier
     from edgeproc.bundles.sync import SyncResult
     from edgeproc.core.protocols import Runtime
@@ -283,7 +283,6 @@ def _run_sync(
 def _materialize_active(store: CacheStore, out: Path) -> None:
     """Reassemble every file in the active manifest into ``out/`` (fail-closed)."""
     from edgeproc.bundles.manifest import IndexManifest  # noqa: PLC0415
-    from edgeproc.bundles.sync import materialize_file  # noqa: PLC0415
 
     pointer = store.read_active()
     if pointer is None:  # pragma: no cover
@@ -291,8 +290,20 @@ def _materialize_active(store: CacheStore, out: Path) -> None:
         # materialize, so a None here means that invariant broke — fail closed, never None-deref.
         _fail("no active pointer to materialize")
     manifest = IndexManifest.model_validate_json(store.get_manifest(pointer.manifest_hash))
+    _materialize_files(store, manifest, out)
+
+
+def _materialize_files(store: CacheStore, manifest: IndexManifest, out: Path) -> None:
+    """Write each manifest file under ``out``, refusing any path that escapes it.
+
+    ``resolve_within`` runs BEFORE any write, so a traversal/absolute path can never
+    land bytes outside ``out`` — defense-in-depth behind the model-level path check.
+    """
+    from edgeproc.bundles.containment import resolve_within  # noqa: PLC0415
+    from edgeproc.bundles.sync import materialize_file  # noqa: PLC0415
+
     for entry in manifest.files:
-        target = out / entry.path
+        target = resolve_within(out, entry.path)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(materialize_file(store, manifest, entry.path))
 

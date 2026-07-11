@@ -11,7 +11,9 @@ from __future__ import annotations
 import hashlib
 import json
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from edgeproc.bundles.containment import ensure_safe_relpath
 
 # Mirrors shared-libs' convention: opaque metadata values are scalars, never `Any`.
 Scalar = str | int | float | bool | None
@@ -36,6 +38,16 @@ class FileEntry(BaseModel):
     size: int  # total uncompressed file length
     file_sha256: str  # bare hex sha256 of the whole reassembled file
     chunks: list[ChunkRef]
+
+    @field_validator("path")
+    @classmethod
+    def _reject_unsafe_path(cls, value: str) -> str:
+        """Refuse traversal/absolute paths at the model boundary (fail-closed).
+
+        The path is written to disk on materialize; a compromised or malformed
+        origin must not be able to smuggle ``../`` or ``/abs`` past parsing.
+        """
+        return ensure_safe_relpath(value)
 
 
 class IndexManifest(BaseModel):
