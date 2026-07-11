@@ -54,6 +54,7 @@ class FaissVectorIndex:
         self._faiss: faiss.Index = faiss.IndexFlatIP(self.config.dimension)
         self._faiss_ids: list[str] = []
         self._live: dict[str, NDArray[np.float32]] = {}
+        self._row_of: dict[str, int] = {}  # entity_id -> its CURRENT authoritative FAISS row
         self._meta: dict[str, Metadata] = {}
         self._tombstoned: set[str] = set()
 
@@ -82,14 +83,21 @@ class FaissVectorIndex:
         self._faiss_ids = list(state.faiss_ids)
         self._tombstoned = set(state.tombstoned)
         self._meta = {entity_id: meta for entity_id, meta in state.meta.items()}
-        self._live = self._reconstruct_live()
+        self._live, self._row_of = self._reconstruct_live_rows()
 
-    def _reconstruct_live(self) -> dict[str, NDArray[np.float32]]:
+    def _reconstruct_live_rows(self) -> tuple[dict[str, NDArray[np.float32]], dict[str, int]]:
+        """Rebuild the live-vector and authoritative-row maps from the persisted rows.
+
+        A duplicate id left by a delete+re-insert keeps its LAST physical row (later
+        re-inserts win); the earlier row is orphaned and stays filtered out on search.
+        """
         live: dict[str, NDArray[np.float32]] = {}
+        row_of: dict[str, int] = {}
         for row, entity_id in enumerate(self._faiss_ids):
             if entity_id not in self._tombstoned:
                 live[entity_id] = np.asarray(self._faiss.reconstruct(row), dtype=np.float32)
-        return live
+                row_of[entity_id] = row
+        return live, row_of
 
     async def insert(self, embeddings: list[VectorEmbedding]) -> None:
         await asyncio.to_thread(self._insert_sync, embeddings)
@@ -108,17 +116,21 @@ class FaissVectorIndex:
             if entity_id in self._live:
                 del self._live[entity_id]
                 del self._meta[entity_id]
+                del self._row_of[entity_id]
                 self._tombstoned.add(entity_id)
 
     async def get_stats(self) -> IndexStats:
         live = len(self._live)
-        total = live + len(self._tombstoned)
+        # Count EVERY dead physical row — deleted ids AND rows superseded by a re-insert —
+        # so the tombstone ratio that triggers rebuilds reflects the index's real bloat.
+        dead = int(self._faiss.ntotal) - live
+        total = live + dead
         return IndexStats(
             index_name=self.index_name,
             vector_count=live,
             index_size_mb=live * self.config.dimension * 4 / (1024 * 1024),
-            tombstone_count=len(self._tombstoned),
-            tombstone_percentage=(len(self._tombstoned) / total * 100.0) if total else 0.0,
+            tombstone_count=dead,
+            tombstone_percentage=(dead / total * 100.0) if total else 0.0,
         )
 
     async def rebuild(self, config: IndexConfig | None = None) -> None:
@@ -135,6 +147,9 @@ class FaissVectorIndex:
         vector = _as_vector(embedding.embedding)
         self._faiss.add(vector.reshape(1, -1))
         self._faiss_ids.append(embedding.entity_id)
+        # This new row is now the entity's authoritative row; any prior row for the same
+        # id (from a delete+re-insert) is left orphaned/dead — filtered on read below.
+        self._row_of[embedding.entity_id] = len(self._faiss_ids) - 1
         self._live[embedding.entity_id] = vector
         self._meta[embedding.entity_id] = embedding.metadata
         self._tombstoned.discard(embedding.entity_id)
@@ -153,7 +168,10 @@ class FaissVectorIndex:
         if self._faiss.ntotal == 0 or k <= 0:
             return []
         query = _as_vector(query_vector).reshape(1, -1)
-        fetch = min(self._faiss.ntotal, k + len(self._tombstoned))
+        # Over-fetch past every dead physical row (deleted + superseded) so we can still
+        # surface k live hits after filtering; underestimating this drops real results.
+        dead_rows = int(self._faiss.ntotal) - len(self._live)
+        fetch = min(self._faiss.ntotal, k + dead_rows)
         scores, indices = self._faiss.search(query, fetch)
         return self._collect(scores[0], indices[0], k, filters)
 
@@ -179,7 +197,12 @@ class FaissVectorIndex:
         if idx < 0:
             return None  # pragma: no cover - fetch is capped at ntotal, so FAISS never pads with -1
         entity_id = self._faiss_ids[idx]
-        if entity_id not in self._live or not _passes(self._meta[entity_id], filters):
+        # Accept a row ONLY if it is the entity's CURRENT authoritative row. A deleted id
+        # is absent from ``_row_of``; a stale row left by a delete+re-insert maps to a
+        # later row — either way this superseded/dead row is refused, never duplicated.
+        if self._row_of.get(entity_id) != idx:
+            return None
+        if not _passes(self._meta[entity_id], filters):
             return None
         return entity_id
 
@@ -188,10 +211,15 @@ class FaissVectorIndex:
             self.config = config.model_copy(update={"dimension": self.config.dimension})
         survivors = list(self._live.items())
         self._faiss = faiss.IndexFlatIP(self.config.dimension)
+        self._reindex_survivors(survivors)
+        self._tombstoned.clear()
+
+    def _reindex_survivors(self, survivors: list[tuple[str, NDArray[np.float32]]]) -> None:
+        """Repopulate the FAISS index + id/row maps from the compacted survivor set."""
         self._faiss_ids = [entity_id for entity_id, _ in survivors]
+        self._row_of = {entity_id: row for row, entity_id in enumerate(self._faiss_ids)}
         if survivors:
             self._faiss.add(np.vstack([vector for _, vector in survivors]))
-        self._tombstoned.clear()
 
 
 def _as_vector(values: list[float]) -> NDArray[np.float32]:
