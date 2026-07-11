@@ -20,8 +20,15 @@ date.
 
 These are the seams already designed into the architecture, in rough priority order:
 
-1. **Wasm-3.0 deterministic kernel** — a sandboxed, portable runtime so domain engines can
-   be shipped as Wasm and run identically across hosts. *(Protocol seam exists; not built.)*
+1. **First-party WASM kernel v0** — one deterministic hot path (chunk hash/verify, BM25
+   scoring, or rerank math) compiled Rust→wasm32 and shipped as a versioned `.wasm`
+   artifact that executes identically in the browser and in Python via wasmtime, filling
+   the existing `CUSTOM_WASM` seam (`edgeproc/core/models.py`). Definition of done: WIT
+   interface + component packaging; cross-host determinism proved by the parity-fixture
+   harness ("Python vs same-wasm-binary-on-both-hosts"); distributed as a signed,
+   content-addressed artifact through the existing CAS/manifest pipeline. Trigger to
+   start: after two consumers share the ORT-WASM standard embedder config (portfolio
+   engineering standard §8.3). *(Protocol seam exists; not built.)*
 2. **Biscuit capability tokens** — fine-grained, attenuable authorization on the routing /
    sync paths instead of all-or-nothing access. *(Protocol seam exists; not built.)*
 3. **Sigstore keyless bundle signing** — an alternative to pinned ed25519 keys, removing the
