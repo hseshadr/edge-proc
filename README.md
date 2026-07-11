@@ -59,8 +59,9 @@ storefront with search + recommendations and zero backend calls after sync.
 
 ## Quickstart
 
-Here's the whole thing working in a few lines. Needs `pip install edge-proc[localvec]`;
-first run downloads `all-MiniLM-L6-v2` (~90 MB).
+Here's the whole thing working in a few lines. Grab the deps with the clone-and-go
+[setup below](#install) (`git clone … && uv sync --all-extras`) — first run downloads
+`all-MiniLM-L6-v2` (~90 MB). (Once edge-proc is on PyPI: `pip install edge-proc[localvec]`.)
 
 ```python
 import asyncio
@@ -161,6 +162,22 @@ terms.
 
 ### Install
 
+edge-proc isn't on PyPI yet, so the working install is the clone-and-go setup below — one
+command, no sibling checkouts:
+
+```bash
+git clone https://github.com/hseshadr/edge-proc.git
+cd edge-proc
+uv sync --all-extras   # core + extras + dev tooling
+```
+
+That Just Works — `shared-libs-python` isn't on PyPI either, so `pyproject.toml` pins it to a
+release tag from public GitHub (see `[tool.uv.sources]`); `uv sync` fetches it for you,
+nothing else to clone. Co-developing `shared-libs-python` alongside EdgeProc? Clone it next
+to this repo and swap the git source for the commented path source in `pyproject.toml`.
+
+Once edge-proc is published to PyPI, the extras install directly:
+
 ```bash
 pip install edge-proc                    # core + CLI (pure router, contracts)
 pip install edge-proc[localvec]          # + FAISS vector runtime (EMBED / SEARCH / RANK)
@@ -172,19 +189,6 @@ EdgeProc is **purely a dependency** — a library an app embeds, not a service y
 for. The core is tiny; the heavy machinery (FAISS, sync) is opt-in behind extras. It builds
 on [`shared-libs-python`](https://github.com/hseshadr/shared-libs-python): the FAISS index
 here is a concrete implementation of that library's `VectorIndex` Protocol.
-
-**Working on EdgeProc itself? Clone-and-go:**
-
-```bash
-git clone https://github.com/hseshadr/edge-proc.git
-cd edge-proc
-uv sync --all-extras   # core + extras + dev tooling
-```
-
-That Just Works — `shared-libs-python` isn't on PyPI, so `pyproject.toml` pins it to a
-release tag from public GitHub (see `[tool.uv.sources]`); `uv sync` fetches it for you,
-nothing else to clone. Co-developing `shared-libs-python` alongside EdgeProc? Clone it next
-to this repo and swap the git source for the commented path source in `pyproject.toml`.
 
 ### The deterministic router
 

@@ -64,6 +64,40 @@ async def test_delete_tombstones_so_search_skips_it() -> None:
     assert "a" not in {doc for doc, _ in results}
 
 
+async def test_reinsert_after_delete_purges_stale_row() -> None:
+    # Regression: FlatIP has no per-row delete, so deleting an id then re-inserting the
+    # SAME id with a NEW vector leaves the old physical row in the FAISS index. If the code
+    # keys liveness on id alone, the resurrected id un-filters that stale row — search then
+    # returns the entity TWICE (duplicate) or scored by the deleted vector. The index must
+    # filter the superseded row itself.
+    idx = _index()
+    await idx.insert([_emb("a", [1.0, 0.0, 0.0, 0.0]), _emb("b", [0.0, 1.0, 0.0, 0.0])])
+    await idx.delete(["a"])
+    # Re-insert "a" pointing the OPPOSITE way (now orthogonal to its original vector).
+    await idx.insert([_emb("a", [0.0, 1.0, 0.0, 0.0])])
+
+    results = await idx.search([1.0, 0.0, 0.0, 0.0], k=5)
+    ids = [doc for doc, _ in results]
+    assert ids.count("a") == 1  # the stale row must never surface a duplicate
+    # Distance must reflect the CURRENT (orthogonal) vector ≈ 1.0, not the deleted
+    # identical-vector row that would score ≈ 0.0.
+    assert dict(results)["a"] == pytest.approx(1.0, abs=1e-6)
+
+
+async def test_reinsert_after_delete_counts_stale_row_as_tombstone() -> None:
+    # The superseded physical row is dead weight a rebuild must compact, so get_stats must
+    # count it — otherwise the tombstone ratio under-reports bloat and rebuilds fire late.
+    idx = _index()
+    await idx.insert([_emb("a", [1.0, 0.0, 0.0, 0.0])])
+    await idx.delete(["a"])
+    await idx.insert([_emb("a", [0.0, 1.0, 0.0, 0.0])])  # 2 physical rows, 1 live
+    stats = await idx.get_stats()
+    assert stats.vector_count == 1
+    assert stats.tombstone_count == 1  # the orphaned old row
+    await idx.rebuild()
+    assert (await idx.get_stats()).tombstone_count == 0  # compacted away
+
+
 async def test_get_stats_reports_live_and_tombstone_counts() -> None:
     idx = _index()
     await idx.insert([_emb("a", [1.0, 0.0, 0.0, 0.0]), _emb("b", [0.0, 1.0, 0.0, 0.0])])

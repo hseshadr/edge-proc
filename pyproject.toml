@@ -38,6 +38,7 @@ bundles = [
     "structlog>=24.4",
     "cryptography>=44",
     "zstandard>=0.25",
+    "packaging>=24",  # PEP 440 version comparison for anti-rollback (sync monotonicity)
 ]
 
 [dependency-groups]

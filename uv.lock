@@ -403,6 +403,7 @@ dependencies = [
 bundles = [
     { name = "cryptography" },
     { name = "httpx" },
+    { name = "packaging" },
     { name = "structlog" },
     { name = "zstandard" },
 ]
@@ -431,6 +432,7 @@ requires-dist = [
     { name = "faiss-cpu", marker = "extra == 'localvec'", specifier = ">=1.9" },
     { name = "httpx", marker = "extra == 'bundles'", specifier = ">=0.27" },
     { name = "numpy", marker = "extra == 'localvec'", specifier = ">=2.0" },
+    { name = "packaging", marker = "extra == 'bundles'", specifier = ">=24" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pydantic-settings", specifier = ">=2.5" },
     { name = "rank-bm25", marker = "extra == 'localvec'", specifier = ">=0.2" },

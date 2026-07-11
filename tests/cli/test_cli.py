@@ -37,6 +37,19 @@ def test_list_runtimes_reports_extra_availability() -> None:
     assert "localvec" in result.stdout
 
 
+def test_keygen_writes_private_key_owner_only(tmp_path: Path) -> None:
+    # A signing key on a shared box must not be world-readable: `private.key` is a secret,
+    # so keygen writes it 0600 (owner rw only), never the default world-readable 0644.
+    result = runner.invoke(app, ["keygen", "--out", str(tmp_path)])
+    assert result.exit_code == 0
+    private = tmp_path / "private.key"
+    assert private.is_file()
+    mode = private.stat().st_mode & 0o777
+    assert oct(mode) == "0o600", f"private key mode is {oct(mode)}, expected 0o600"
+    # The public key is not a secret — it stays readable so a verifier can pin it.
+    assert (tmp_path / "public.key").is_file()
+
+
 def _save_catalog_index(directory: Path) -> None:
     encoder = FakeEncoder()
     index = FaissVectorIndex("catalog", IndexConfig(dimension=encoder.dim))
@@ -145,3 +158,24 @@ def test_route_missing_index_dir_fails_closed(
 
     assert result.exit_code == 1
     assert '"success"' not in result.stdout
+
+
+def test_materialize_refuses_traversal_before_writing(tmp_path: Path) -> None:
+    # Defense-in-depth: even if a manifest with a traversal path somehow reached the
+    # write loop (bypassing model validation via model_construct here), the loop must
+    # refuse it BEFORE any write — nothing lands outside the output dir.
+    from edgeproc.bundles.containment import UnsafePathError  # noqa: PLC0415
+    from edgeproc.bundles.manifest import FileEntry, IndexManifest  # noqa: PLC0415
+
+    out = tmp_path / "out"
+    evil = FileEntry.model_construct(
+        path="../evil.txt", file_type=None, size=0, file_sha256="00" * 32, chunks=[]
+    )
+    manifest = IndexManifest.model_construct(
+        bundle_id="b", version="1.0.0", files=[evil], metadata={}
+    )
+
+    with pytest.raises(UnsafePathError):
+        _cli_app_module._materialize_files(object(), manifest, out)
+
+    assert not (tmp_path / "evil.txt").exists()

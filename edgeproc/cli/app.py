@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, NoReturn
 
@@ -25,7 +26,7 @@ from edgeproc.core.registry import RuntimeRegistry
 if TYPE_CHECKING:
     from edgeproc.bundles.adapters import FetchAdapter
     from edgeproc.bundles.cas import CacheStore
-    from edgeproc.bundles.manifest import VersionPointer
+    from edgeproc.bundles.manifest import IndexManifest, VersionPointer
     from edgeproc.bundles.signing import Ed25519Signer, Signer, Verifier
     from edgeproc.bundles.sync import SyncResult
     from edgeproc.core.protocols import Runtime
@@ -149,9 +150,21 @@ def keygen(
 
     out.mkdir(parents=True, exist_ok=True)
     private, public = generate_keypair()
-    (out / "private.key").write_bytes(private.private_bytes_raw())
+    _write_secret(out / "private.key", private.private_bytes_raw())
     (out / "public.key").write_bytes(public.public_bytes_raw())
     typer.echo(f"wrote {out / 'private.key'} and {out / 'public.key'}")
+
+
+def _write_secret(path: Path, data: bytes) -> None:
+    """Write a secret file readable/writable by its owner ONLY (mode ``0600``).
+
+    A signing key must never be world-readable: ``os.open`` creates it 0600 up front and
+    ``os.chmod`` re-asserts 0600 even if the file pre-existed or an umask loosened it.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(data)
+    os.chmod(path, 0o600)
 
 
 @app.command()
@@ -283,7 +296,6 @@ def _run_sync(
 def _materialize_active(store: CacheStore, out: Path) -> None:
     """Reassemble every file in the active manifest into ``out/`` (fail-closed)."""
     from edgeproc.bundles.manifest import IndexManifest  # noqa: PLC0415
-    from edgeproc.bundles.sync import materialize_file  # noqa: PLC0415
 
     pointer = store.read_active()
     if pointer is None:  # pragma: no cover
@@ -291,8 +303,20 @@ def _materialize_active(store: CacheStore, out: Path) -> None:
         # materialize, so a None here means that invariant broke — fail closed, never None-deref.
         _fail("no active pointer to materialize")
     manifest = IndexManifest.model_validate_json(store.get_manifest(pointer.manifest_hash))
+    _materialize_files(store, manifest, out)
+
+
+def _materialize_files(store: CacheStore, manifest: IndexManifest, out: Path) -> None:
+    """Write each manifest file under ``out``, refusing any path that escapes it.
+
+    ``resolve_within`` runs BEFORE any write, so a traversal/absolute path can never
+    land bytes outside ``out`` — defense-in-depth behind the model-level path check.
+    """
+    from edgeproc.bundles.containment import resolve_within  # noqa: PLC0415
+    from edgeproc.bundles.sync import materialize_file  # noqa: PLC0415
+
     for entry in manifest.files:
-        target = out / entry.path
+        target = resolve_within(out, entry.path)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(materialize_file(store, manifest, entry.path))
 
