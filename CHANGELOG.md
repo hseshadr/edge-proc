@@ -4,7 +4,16 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
 
 ## [Unreleased]
 
-House engineering-standard alignment — CI and docs only, no library code changes:
+## [0.1.2] — 2026-07-11
+
+Propagation-chain release: re-pins the upstream Lego so downstream consumers can bump
+in one hop (`shared-libs-python v0.1.3 → edge-proc v0.1.2 → edge-reco`). No library
+code changes.
+
+- **Deps.** `shared-libs-python` git-tag pin bumped v0.1.2 → **v0.1.3** (upstream
+  release is gate/CI/docs-only — zero runtime change).
+
+Also ships the house engineering-standard alignment — CI and docs only:
 
 - **CI.** The workflow now literally runs `uv run poe gate`, so the local gate and CI
   can never drift one-sidedly; minimal token permissions; `uv sync --frozen`;
