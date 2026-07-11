@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, NoReturn
 
@@ -149,9 +150,21 @@ def keygen(
 
     out.mkdir(parents=True, exist_ok=True)
     private, public = generate_keypair()
-    (out / "private.key").write_bytes(private.private_bytes_raw())
+    _write_secret(out / "private.key", private.private_bytes_raw())
     (out / "public.key").write_bytes(public.public_bytes_raw())
     typer.echo(f"wrote {out / 'private.key'} and {out / 'public.key'}")
+
+
+def _write_secret(path: Path, data: bytes) -> None:
+    """Write a secret file readable/writable by its owner ONLY (mode ``0600``).
+
+    A signing key must never be world-readable: ``os.open`` creates it 0600 up front and
+    ``os.chmod`` re-asserts 0600 even if the file pre-existed or an umask loosened it.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(data)
+    os.chmod(path, 0o600)
 
 
 @app.command()

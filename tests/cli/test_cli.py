@@ -37,6 +37,19 @@ def test_list_runtimes_reports_extra_availability() -> None:
     assert "localvec" in result.stdout
 
 
+def test_keygen_writes_private_key_owner_only(tmp_path: Path) -> None:
+    # A signing key on a shared box must not be world-readable: `private.key` is a secret,
+    # so keygen writes it 0600 (owner rw only), never the default world-readable 0644.
+    result = runner.invoke(app, ["keygen", "--out", str(tmp_path)])
+    assert result.exit_code == 0
+    private = tmp_path / "private.key"
+    assert private.is_file()
+    mode = private.stat().st_mode & 0o777
+    assert oct(mode) == "0o600", f"private key mode is {oct(mode)}, expected 0o600"
+    # The public key is not a secret — it stays readable so a verifier can pin it.
+    assert (tmp_path / "public.key").is_file()
+
+
 def _save_catalog_index(directory: Path) -> None:
     encoder = FakeEncoder()
     index = FaissVectorIndex("catalog", IndexConfig(dimension=encoder.dim))
