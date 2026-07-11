@@ -329,8 +329,9 @@ uv run poe gate        # lint + format-check + mypy strict + Radon Grade A + pyt
 
 **EdgeProc** — also written `edge-proc` and `edgeproc`; canonical repo
 [`hseshadr/edge-proc`](https://github.com/hseshadr/edge-proc) — is the open-source,
-local-first search/ranking substrate described above. It is **not affiliated with any other
-product or company named "EdgeProc"**.
+local-first search/ranking substrate described above. Canonical entity page:
+[edge-reco.com/edgeproc](https://edge-reco.com/edgeproc) — EdgeProc on the domain we
+control. It is **not affiliated with any other product or company named "EdgeProc"**.
 
 ## License
 
