@@ -4,6 +4,31 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
 
 ## [Unreleased]
 
+Security hardening pass (#11) — **additive runtime safety only**. No persisted or signed
+manifest/pointer format changed; `canonical_bytes`, signing, and verification are untouched,
+so every already-signed bundle still verifies and materializes unchanged.
+
+- **Trust-boundary path containment (§3.1 trust gate).** New `bundles/containment.py`
+  chokepoint refuses traversal (`../`), backslash, and absolute paths. A `FileEntry.path`
+  `field_validator` rejects an unsafe path at parse time, and materialization re-checks the
+  fully-resolved target still lies inside the output root (catches symlink/zip-slip escapes).
+- **Private key written 0600.** `keygen` now writes `private.key` with owner-only
+  permissions instead of the umask default (world-readable 0644).
+- **Decompression-bomb + oversized-body caps.** CAS decompression streams at most
+  `max_decompressed_bytes` (default 64 MiB) rather than trusting the zstd frame's
+  content-size header, and the HTTP adapter refuses a response body past `max_fetch_bytes`
+  (default 256 MiB) — both fail-closed and configurable via `EdgeProcSettings`.
+- **Anti-rollback on promote.** `promote()` refuses a signed pointer whose version is
+  provably older (PEP 440) than the active one, so a replayed stale `/latest` cannot
+  downgrade a client. Equal/forward versions, first promote, and unparseable versions are
+  still allowed — a valid signed bundle is never rejected.
+- **FAISS stale-row purge.** Deleting an id then re-inserting it no longer leaves the old
+  physical row addressable; search never returns the duplicated/stale-scored entity, and
+  `get_stats` counts the superseded row so a rebuild compacts it.
+- **CVE lock bumps (#9).** `torch` 2.12.0→2.13.0 (CVE-2025-3000), `cryptography`
+  48.0.0→49.0.0 (GHSA-537c-gmf6-5ccf), `pydantic-settings` 2.14.1→2.14.2
+  (GHSA-4xgf-cpjx-pc3j) — all in-range lock bumps, no `pyproject` floor changes.
+
 ## [0.1.2] — 2026-07-11
 
 Propagation-chain release: re-pins the upstream Lego so downstream consumers can bump
