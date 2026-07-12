@@ -4,6 +4,13 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
 
 ## [Unreleased]
 
+- **Single-point trust-boundary hardening.** Bundle models now reject non-canonical SHA-256
+  values for chunk, file, and manifest digests; direct CAS calls validate digests and resolve
+  every object path inside the store root, including symlinked storage directories. Monotonic
+  sequences must be non-negative, and reusing an active sequence for different content is
+  rejected while exact idempotent replay and legacy signed-pointer bytes remain unchanged.
+  `keygen` creates or tightens its output directory to owner-only mode `0700`.
+
 ## [0.1.3] — 2026-07-12
 
 Security hardening pass (#11) — **additive runtime safety only**. No persisted or signed

@@ -19,6 +19,42 @@ from edgeproc.bundles.manifest import (
     manifest_digest,
 )
 
+_INVALID_SHA256_VALUES = (
+    "",
+    "ab" * 31,
+    "ab" * 33,
+    "gg" * 32,
+    "AB" * 32,
+    "../active",
+)
+
+
+@pytest.mark.parametrize("bad_hash", _INVALID_SHA256_VALUES)
+def test_chunk_ref_rejects_invalid_sha256_hash(bad_hash: str) -> None:
+    # Given / When / Then
+    with pytest.raises(ValidationError):
+        ChunkRef(hash=bad_hash, size=1)
+
+
+@pytest.mark.parametrize("bad_hash", _INVALID_SHA256_VALUES)
+def test_file_entry_rejects_invalid_file_sha256(bad_hash: str) -> None:
+    # Given / When / Then
+    with pytest.raises(ValidationError):
+        FileEntry(path="file.bin", size=0, file_sha256=bad_hash, chunks=[])
+
+
+@pytest.mark.parametrize("bad_hash", _INVALID_SHA256_VALUES)
+def test_version_pointer_rejects_invalid_manifest_hash(bad_hash: str) -> None:
+    # Given / When / Then
+    with pytest.raises(ValidationError):
+        VersionPointer(manifest_hash=bad_hash, version="1.0.0", signature="sig")
+
+
+def test_version_pointer_rejects_negative_sequence() -> None:
+    # Given / When / Then
+    with pytest.raises(ValidationError):
+        VersionPointer(manifest_hash="ab" * 32, version="1.0.0", sequence=-1, signature="sig")
+
 
 @pytest.mark.parametrize(
     "bad_path",

@@ -10,14 +10,26 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Final
+import re
+from typing import Annotated, Final
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
 from edgeproc.bundles.containment import ensure_safe_relpath
 
 # Mirrors shared-libs' convention: opaque metadata values are scalars, never `Any`.
 Scalar = str | int | float | bool | None
+_SHA256_PATTERN: Final = re.compile(r"[0-9a-f]{64}")
+
+
+def validate_sha256_hex(value: str) -> str:
+    """Return a canonical bare SHA-256 digest or reject it at the trust boundary."""
+    if _SHA256_PATTERN.fullmatch(value) is None:
+        raise ValueError("invalid SHA-256 digest: expected 64 lowercase hexadecimal characters")
+    return value
+
+
+type Sha256Hex = Annotated[str, AfterValidator(validate_sha256_hex)]
 
 
 class ChunkRef(BaseModel):
@@ -25,7 +37,7 @@ class ChunkRef(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    hash: str
+    hash: Sha256Hex
     size: int  # uncompressed chunk length in bytes
 
 
@@ -37,7 +49,7 @@ class FileEntry(BaseModel):
     path: str
     file_type: str | None = None
     size: int  # total uncompressed file length
-    file_sha256: str  # bare hex sha256 of the whole reassembled file
+    file_sha256: Sha256Hex  # bare hex sha256 of the whole reassembled file
     chunks: list[ChunkRef]
 
     @field_validator("path")
@@ -75,11 +87,11 @@ class VersionPointer(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    manifest_hash: str  # hex sha256 of the manifest's canonical bytes
+    manifest_hash: Sha256Hex  # hex sha256 of the manifest's canonical bytes
     version: str
     bundle_id: str | None = None  # identity binding (optional; None ⇒ legacy preimage)
     channel: str | None = None  # release-channel binding (optional)
-    sequence: int | None = None  # monotonic freshness counter (optional)
+    sequence: int | None = Field(default=None, ge=0)  # monotonic freshness counter (optional)
     signature: str  # ed25519 over pointer_signing_bytes(self)
 
 

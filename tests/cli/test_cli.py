@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -48,6 +49,36 @@ def test_keygen_writes_private_key_owner_only(tmp_path: Path) -> None:
     assert oct(mode) == "0o600", f"private key mode is {oct(mode)}, expected 0o600"
     # The public key is not a secret — it stays readable so a verifier can pin it.
     assert (tmp_path / "public.key").is_file()
+
+
+def test_keygen_creates_output_directory_owner_only(tmp_path: Path) -> None:
+    # Given
+    out = tmp_path / "keys"
+    previous_umask = os.umask(0)
+
+    # When
+    try:
+        result = runner.invoke(app, ["keygen", "--out", str(out)])
+    finally:
+        os.umask(previous_umask)
+
+    # Then
+    assert result.exit_code == 0
+    assert out.stat().st_mode & 0o777 == 0o700
+
+
+def test_keygen_tightens_existing_output_directory(tmp_path: Path) -> None:
+    # Given
+    out = tmp_path / "keys"
+    out.mkdir(mode=0o755)
+    out.chmod(0o755)
+
+    # When
+    result = runner.invoke(app, ["keygen", "--out", str(out)])
+
+    # Then
+    assert result.exit_code == 0
+    assert out.stat().st_mode & 0o777 == 0o700
 
 
 def test_keygen_refuses_symlinked_key_path(tmp_path: Path) -> None:
