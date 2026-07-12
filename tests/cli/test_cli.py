@@ -81,6 +81,22 @@ def test_keygen_tightens_existing_output_directory(tmp_path: Path) -> None:
     assert out.stat().st_mode & 0o777 == 0o700
 
 
+def test_keygen_refuses_symlinked_output_directory(tmp_path: Path) -> None:
+    # Given
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    out = tmp_path / "keys"
+    out.symlink_to(outside, target_is_directory=True)
+
+    # When
+    result = runner.invoke(app, ["keygen", "--out", str(out)])
+
+    # Then
+    assert result.exit_code != 0
+    assert not (outside / "private.key").exists()
+    assert not (outside / "public.key").exists()
+
+
 def test_keygen_refuses_symlinked_key_path(tmp_path: Path) -> None:
     # An attacker pre-plants a symlink where private.key will be written, aimed at a victim
     # file. keygen must NOT follow it (O_NOFOLLOW): it fails closed and the victim is intact.

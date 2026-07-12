@@ -193,6 +193,8 @@ def keygen(
 
 def _prepare_key_directory(path: Path) -> None:
     """Create or tighten a key output directory to owner-only mode ``0700``."""
+    if path.is_symlink():
+        raise OSError("refusing symlinked key output directory")
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
     path.chmod(0o700)
 

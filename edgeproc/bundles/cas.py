@@ -79,10 +79,21 @@ def _validated_digest(digest: str) -> str:
         raise IntegrityError(str(exc)) from exc
 
 
+def _open_exclusive_temp(path: Path) -> int:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        return os.open(path, flags, 0o600)
+    except OSError as exc:
+        raise IntegrityError("atomic write refused an existing or unsafe temp path") from exc
+
+
 def _atomic_write(target: Path, data: bytes) -> None:
     """Write ``data`` to ``target`` atomically via a fsynced same-dir temp + replace."""
     tmp = target.with_name(f"{target.name}.tmp.{os.getpid()}")
-    with tmp.open("wb") as handle:
+    fd = _open_exclusive_temp(tmp)
+    with os.fdopen(fd, "wb") as handle:
         handle.write(data)
         handle.flush()
         os.fsync(handle.fileno())
