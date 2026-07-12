@@ -66,6 +66,48 @@ def test_keygen_refuses_symlinked_key_path(tmp_path: Path) -> None:
     assert victim.read_bytes() == b"SECRET-ORIGINAL"  # the symlink target was NOT clobbered
 
 
+def test_sync_missing_trust_key_fails_closed(tmp_path: Path) -> None:
+    # A pinned trust-root pubkey path that does not exist must fail CLOSED with a clean
+    # message, never a raw traceback: an unreadable key file is operator error, not a crash.
+    result = runner.invoke(
+        app,
+        [
+            "sync",
+            "--base-url",
+            str(tmp_path / "origin"),
+            "--cache-dir",
+            str(tmp_path / "cache"),
+            "--key",
+            str(tmp_path / "absent.key"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "Traceback" not in result.stderr
+    assert "trust-root key" in result.stderr
+
+
+def test_sync_malformed_trust_key_fails_closed(tmp_path: Path) -> None:
+    # A present but wrong-length pubkey (not 32 raw ed25519 bytes) must fail CLOSED cleanly,
+    # mirroring how `publish` handles a malformed signing key — no traceback escapes.
+    bad = tmp_path / "public.key"
+    bad.write_bytes(b"short")  # not a 32-byte raw ed25519 public key
+    result = runner.invoke(
+        app,
+        [
+            "sync",
+            "--base-url",
+            str(tmp_path / "origin"),
+            "--cache-dir",
+            str(tmp_path / "cache"),
+            "--key",
+            str(bad),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "Traceback" not in result.stderr
+    assert "malformed trust-root key" in result.stderr
+
+
 def _save_catalog_index(directory: Path) -> None:
     encoder = FakeEncoder()
     index = FaissVectorIndex("catalog", IndexConfig(dimension=encoder.dim))

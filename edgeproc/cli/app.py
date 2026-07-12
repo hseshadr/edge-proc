@@ -27,7 +27,12 @@ if TYPE_CHECKING:
     from edgeproc.bundles.adapters import FetchAdapter
     from edgeproc.bundles.cas import CacheStore
     from edgeproc.bundles.manifest import IndexManifest, VersionPointer
-    from edgeproc.bundles.signing import Ed25519Signer, Signer, Verifier
+    from edgeproc.bundles.signing import (
+        Ed25519Signer,
+        Ed25519Verifier,
+        Signer,
+        Verifier,
+    )
     from edgeproc.bundles.sync import SyncResult
     from edgeproc.core.protocols import Runtime
     from edgeproc.localvec.encoder import Encoder
@@ -104,7 +109,7 @@ def sync(
         from edgeproc.bundles.signing import Ed25519Verifier  # noqa: PLC0415
     except ImportError:  # pragma: no cover - exercised only without the [bundles] extra
         _fail("install edge-proc[bundles] to use sync")
-    verifier = Ed25519Verifier.from_public_bytes(_resolve_trust_key(key).read_bytes())
+    verifier = _load_verifier(key, Ed25519Verifier)
     store = FilesystemCacheStore(cache_dir)
     adapter = HttpAdapter() if http else FilesystemAdapter()
     result = _run_sync(
@@ -307,6 +312,25 @@ def _resolve_trust_key(key: Path | None) -> Path:
     if resolved is None:
         _fail("no trust root: pass --key or set EDGEPROC_TRUST_ROOT_PUBKEY_PATH (refusing to sync)")
     return resolved
+
+
+def _load_verifier(key: Path | None, verifier_cls: type[Ed25519Verifier]) -> Verifier:
+    """Load the pinned ed25519 trust-root pubkey into a ``Verifier``; fail closed if it can't.
+
+    Mirrors ``_load_signer``: a missing/unreadable key FILE (OSError) and a present-but-malformed
+    key (ValueError from ``from_public_bytes`` — wrong length / bad bytes) each fail closed with a
+    distinct, actionable message rather than leaking a traceback. No trust root AT ALL is already
+    refused upstream by ``_resolve_trust_key``, so the sync still never runs unverified.
+    """
+    path = _resolve_trust_key(key)
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        _fail(f"could not read trust-root key {path}: {exc}")
+    try:
+        return verifier_cls.from_public_bytes(raw)
+    except ValueError as exc:
+        _fail(f"malformed trust-root key {path}: {exc}")
 
 
 def _run_sync(
