@@ -181,14 +181,22 @@ def keygen(
     """Write a raw ed25519 keypair (``private.key`` + ``public.key``) into ``--out``."""
     from edgeproc.bundles.signing import generate_keypair  # noqa: PLC0415
 
-    out.mkdir(parents=True, exist_ok=True)
     private, public = generate_keypair()
     try:
+        _prepare_key_directory(out)
         _write_secret(out / "private.key", private.private_bytes_raw())
         _write_no_follow(out / "public.key", public.public_bytes_raw(), 0o644)
     except OSError as exc:  # e.g. a pre-planted symlink at a key path (O_NOFOLLOW → ELOOP)
         _fail(f"could not write key files under {out}: {exc}")
     typer.echo(f"wrote {out / 'private.key'} and {out / 'public.key'}")
+
+
+def _prepare_key_directory(path: Path) -> None:
+    """Create or tighten a key output directory to owner-only mode ``0700``."""
+    if path.is_symlink():
+        raise OSError("refusing symlinked key output directory")
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path.chmod(0o700)
 
 
 def _write_secret(path: Path, data: bytes) -> None:

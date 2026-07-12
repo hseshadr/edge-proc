@@ -128,6 +128,57 @@ def test_put_chunk_compressed_rejects_decompression_bomb(tmp_path: Path) -> None
     assert store.has_chunk(chunk_hash) is False  # fail-closed cleanup
 
 
+def test_put_chunk_compressed_rejects_digest_path_traversal(tmp_path: Path) -> None:
+    # Given
+    victim = tmp_path / "victim"
+    victim.write_bytes(b"original")
+    store = FilesystemCacheStore(tmp_path / "cache")
+
+    # When / Then
+    with pytest.raises(IntegrityError, match="invalid SHA-256 digest"):
+        store.put_chunk_compressed("../../victim", zstandard.compress(b"attacker"))
+    assert victim.read_bytes() == b"original"
+
+
+def test_get_manifest_rejects_digest_path_traversal(tmp_path: Path) -> None:
+    # Given
+    store = FilesystemCacheStore(tmp_path)
+
+    # When / Then
+    with pytest.raises(IntegrityError, match="invalid SHA-256 digest"):
+        store.get_manifest("../active")
+
+
+def test_put_manifest_refuses_preplanted_atomic_temp_symlink(tmp_path: Path) -> None:
+    # Given
+    root = tmp_path / "cache"
+    store = FilesystemCacheStore(root)
+    manifest = b"signed manifest"
+    digest = hashlib.sha256(manifest).hexdigest()
+    victim = tmp_path / "victim"
+    victim.write_bytes(b"original")
+    (root / "manifests" / f"{digest}.tmp.{os.getpid()}").symlink_to(victim)
+
+    # When / Then
+    with pytest.raises(IntegrityError, match="atomic write"):
+        store.put_manifest(manifest)
+    assert victim.read_bytes() == b"original"
+
+
+@pytest.mark.parametrize("directory", ["chunks", "manifests"])
+def test_store_rejects_symlinked_cas_directory(tmp_path: Path, directory: str) -> None:
+    # Given
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    root = tmp_path / "cache"
+    root.mkdir()
+    (root / directory).symlink_to(outside, target_is_directory=True)
+
+    # When / Then
+    with pytest.raises(IntegrityError, match="escapes"):
+        FilesystemCacheStore(root)
+
+
 def test_manifest_round_trip_and_fail_closed(tmp_path: Path) -> None:
     store = _store(tmp_path)
     manifest = _manifest_for(store, b"a" * 32, b"b" * 32)

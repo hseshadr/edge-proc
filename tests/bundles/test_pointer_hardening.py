@@ -142,6 +142,19 @@ def test_promote_allows_equal_sequence_idempotent(tmp_path: Path) -> None:
     assert store.read_active() == pointer
 
 
+def test_promote_refuses_equal_sequence_for_different_pointer(tmp_path: Path) -> None:
+    # Given
+    store = FilesystemCacheStore(tmp_path)
+    active = _make_pointer(store, b"active", version="1.0.0", sequence=5)
+    equivocation = _make_pointer(store, b"other", version="1.0.0", sequence=5)
+    store.promote(active)
+
+    # When / Then
+    with pytest.raises(RollbackError):
+        store.promote(equivocation)
+    assert store.read_active() == active
+
+
 def _make_pointer(
     store: FilesystemCacheStore, payload: bytes, *, version: str, sequence: int
 ) -> VersionPointer:
