@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -63,13 +64,54 @@ class IndexManifest(BaseModel):
 
 
 class VersionPointer(BaseModel):
-    """Signed pointer to a manifest; ``signature`` is detached over the rest."""
+    """Signed pointer to a manifest; ``signature`` is detached over the rest.
+
+    ``bundle_id``/``channel`` optionally BIND the signature to a bundle identity and
+    release channel; ``sequence`` is an optional monotonic freshness counter. All three
+    default ``None`` and are excluded from the signed preimage when unset (see
+    :func:`pointer_signing_bytes`), so an already-signed legacy pointer — which carries
+    none of them — verifies byte-for-byte and existing verification is unchanged.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     manifest_hash: str  # hex sha256 of the manifest's canonical bytes
     version: str
-    signature: str  # ed25519 over canonical_bytes(self, exclude={"signature"})
+    bundle_id: str | None = None  # identity binding (optional; None ⇒ legacy preimage)
+    channel: str | None = None  # release-channel binding (optional)
+    sequence: int | None = None  # monotonic freshness counter (optional)
+    signature: str  # ed25519 over pointer_signing_bytes(self)
+
+
+# Identity/freshness fields added after v0. They are excluded from the signing preimage
+# whenever they are unset, so a pointer carrying none of them hashes IDENTICALLY to the
+# legacy {manifest_hash, version} bytes — every already-signed pointer still verifies.
+_POINTER_OPTIONAL_FIELDS: Final = ("bundle_id", "channel", "sequence")
+
+
+def pointer_signing_bytes(pointer: VersionPointer) -> bytes:
+    """The exact bytes signed/verified for ``pointer`` (backward-compatible).
+
+    Excludes ``signature`` plus any identity/freshness field left ``None``. A pointer that
+    binds no identity therefore produces the byte-identical legacy preimage; a field that
+    IS set is folded in, binding the signature to that bundle / channel / sequence.
+    """
+    exclude = {"signature"}
+    exclude.update(f for f in _POINTER_OPTIONAL_FIELDS if getattr(pointer, f) is None)
+    return canonical_bytes(pointer, exclude=exclude)
+
+
+def is_fresh_sequence(incoming: VersionPointer, active: VersionPointer) -> bool:
+    """Freshness predicate for a downstream anti-replay guard (monotonic ``sequence``).
+
+    True only when ``incoming.sequence`` is STRICTLY greater than ``active.sequence`` — an
+    equal or lower sequence is a stale replay (non-fresh). When either pointer carries no
+    sequence the check is undecidable and returns True, so a legacy pointer is never called
+    stale; the caller falls back to the version-based anti-rollback guard.
+    """
+    if incoming.sequence is None or active.sequence is None:
+        return True
+    return incoming.sequence > active.sequence
 
 
 def canonical_bytes(model: BaseModel, *, exclude: set[str] | None = None) -> bytes:

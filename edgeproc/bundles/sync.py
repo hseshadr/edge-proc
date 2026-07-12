@@ -20,7 +20,7 @@ from edgeproc.bundles.manifest import (
     FileEntry,
     IndexManifest,
     VersionPointer,
-    canonical_bytes,
+    pointer_signing_bytes,
 )
 from edgeproc.bundles.signing import Verifier
 
@@ -42,10 +42,41 @@ def _sha256(data: bytes) -> str:
 
 
 def _fetch_pointer(base_url: str, adapter: FetchAdapter, verifier: Verifier) -> VersionPointer:
-    """Fetch ``/latest`` and verify its detached signature (fail-closed)."""
+    """Fetch ``/latest`` and verify its detached signature (fail-closed).
+
+    The verified preimage is :func:`pointer_signing_bytes`, so a legacy pointer (no
+    identity fields) verifies against its original signature unchanged, while a pointer
+    that binds a bundle_id/channel/sequence is authenticated together with that identity.
+    """
     pointer = VersionPointer.model_validate_json(adapter.fetch_bytes(base_url + "/latest"))
-    verifier.verify(canonical_bytes(pointer, exclude={"signature"}), pointer.signature)
+    verifier.verify(pointer_signing_bytes(pointer), pointer.signature)
     return pointer
+
+
+def _check_identity(
+    pointer: VersionPointer, expected_bundle_id: str | None, expected_channel: str | None
+) -> None:
+    """Fail-closed identity pin (opt-in): refuse a pointer bound to another bundle/channel.
+
+    A caller that pins nothing gets today's behavior. When an expectation IS set, a validly
+    signed pointer minted for a DIFFERENT bundle/channel — a cross-bundle replay under a
+    shared signing key + transport compromise — is refused before any promote.
+    """
+    if expected_bundle_id is not None and pointer.bundle_id != expected_bundle_id:
+        raise IntegrityError(f"pointer bundle_id {pointer.bundle_id!r} != expected")
+    if expected_channel is not None and pointer.channel != expected_channel:
+        raise IntegrityError(f"pointer channel {pointer.channel!r} != expected")
+
+
+def _check_manifest_identity(pointer: VersionPointer, manifest: IndexManifest) -> None:
+    """When the pointer BINDS a bundle_id, the manifest it names must declare the same one.
+
+    Closes the forge gap: a pointer claiming bundle_id ``A`` that points at a manifest
+    declaring ``B`` (a crafted pointer under a shared key) is refused, so the pinned
+    identity is sound rather than a self-asserted label.
+    """
+    if pointer.bundle_id is not None and manifest.bundle_id != pointer.bundle_id:
+        raise IntegrityError(f"manifest bundle_id {manifest.bundle_id!r} != pointer")
 
 
 def _fetch_manifest(
@@ -94,11 +125,24 @@ def _verify_reassembly(manifest: IndexManifest, store: CacheStore) -> None:
 
 
 def sync_index(
-    *, base_url: str, store: CacheStore, adapter: FetchAdapter, verifier: Verifier
+    *,
+    base_url: str,
+    store: CacheStore,
+    adapter: FetchAdapter,
+    verifier: Verifier,
+    expected_bundle_id: str | None = None,
+    expected_channel: str | None = None,
 ) -> SyncResult:
-    """Pull a signed pointer, diff + fetch missing chunks, verify, atomically swap."""
+    """Pull a signed pointer, diff + fetch missing chunks, verify, atomically swap.
+
+    ``expected_bundle_id``/``expected_channel`` (opt-in) pin the consumer to a bundle
+    identity: a pointer bound to any other one is refused fail-closed. Left unset, sync
+    behaves exactly as before.
+    """
     pointer = _fetch_pointer(base_url, adapter, verifier)
+    _check_identity(pointer, expected_bundle_id, expected_channel)
     manifest = _fetch_manifest(base_url, pointer, adapter, store)
+    _check_manifest_identity(pointer, manifest)
     diff = _missing_chunks(manifest, store)
     bytes_fetched = _fetch_missing(base_url, diff.to_fetch, adapter, store)
     _verify_reassembly(manifest, store)

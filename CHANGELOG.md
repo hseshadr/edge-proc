@@ -8,6 +8,18 @@ Security hardening pass (#11) — **additive runtime safety only**. No persisted
 manifest/pointer format changed; `canonical_bytes`, signing, and verification are untouched,
 so every already-signed bundle still verifies and materializes unchanged.
 
+- **Signed-pointer identity binding + monotonic sequence (opt-in, backward-compatible).**
+  `VersionPointer` gains three optional fields — `bundle_id`, `channel`, `sequence` — folded
+  into the signed bytes only when set (`pointer_signing_bytes`), so a pointer that binds none
+  of them hashes to the exact legacy `{manifest_hash, version}` preimage and every
+  already-signed pointer verifies byte-for-byte. `publish --bind-identity`/`--channel`/
+  `--sequence` stamp them; `sync --expected-bundle-id`/`--expected-channel` pin the consumer
+  so a validly-signed pointer minted for another bundle/channel (a cross-bundle replay under a
+  shared key + transport compromise) is refused before promote, and a pointer whose bound
+  `bundle_id` disagrees with its manifest is rejected. A provably-lower `sequence` is refused at
+  `promote` alongside the PEP 440 anti-rollback guard, and `is_fresh_sequence` gives a downstream
+  a strict-monotonic freshness/anti-replay predicate. All identity/freshness inputs are opt-in;
+  the default `publish`/`sync` behavior and the persisted pointer format are unchanged.
 - **Trust-boundary path containment (§3.1 trust gate).** New `bundles/containment.py`
   chokepoint refuses traversal (`../`), backslash, and absolute paths. A `FileEntry.path`
   `field_validator` rejects an unsafe path at parse time, and materialization re-checks the
