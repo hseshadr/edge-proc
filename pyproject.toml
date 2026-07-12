@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "edge-proc"
-version = "0.1.2"
+version = "0.1.3"
 description = "AI-native local execution substrate: a pure deterministic router over pluggable runtimes, a FAISS vector runtime, and a signed bundle/sync substrate. The foundational local-execution Lego."
 readme = "README.md"
 requires-python = ">=3.13"

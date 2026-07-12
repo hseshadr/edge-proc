@@ -4,6 +4,8 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-07-12
+
 Security hardening pass (#11) — **additive runtime safety only**. No persisted or signed
 manifest/pointer format changed; `canonical_bytes`, signing, and verification are untouched,
 so every already-signed bundle still verifies and materializes unchanged.
