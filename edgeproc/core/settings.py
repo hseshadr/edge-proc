@@ -50,6 +50,11 @@ class EdgeProcSettings(BaseSettings):
     max_decompressed_bytes: int = 64 * 1024 * 1024
     # A single HTTP fetch (pointer/manifest/chunk); 256 MiB bounds a hostile origin's body.
     max_fetch_bytes: int = 256 * 1024 * 1024
+    # AGGREGATE per-sync ceilings (disk-exhaustion defense): a hostile/runaway manifest
+    # can enumerate unbounded chunks/files, so one sync refuses to pull past these. Generous
+    # enough never to reject a legit bundle; a single sync over 4 GiB or 100k files is refused.
+    max_sync_total_bytes: int = 4 * 1024 * 1024 * 1024
+    max_sync_files: int = 100_000
     # Per-task resource budgets; the source of truth for the Task model's defaults.
     task_budget_ms: int = 5000
     task_budget_memory_mb: int = 256

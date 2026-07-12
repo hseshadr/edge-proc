@@ -8,6 +8,15 @@ Security hardening pass (#11) — **additive runtime safety only**. No persisted
 manifest/pointer format changed; `canonical_bytes`, signing, and verification are untouched,
 so every already-signed bundle still verifies and materializes unchanged.
 
+- **Local-FS hardening: `O_NOFOLLOW` on key writes + aggregate sync caps.** `keygen` now
+  writes `private.key`/`public.key` with `O_NOFOLLOW` (portable via `getattr`), so a symlink
+  pre-planted at a key path is refused (ELOOP → fail-closed) instead of redirecting the write
+  onto a victim file; materialization was already symlink-safe via the §3.1 containment gate, so
+  it is unchanged. `sync_index` gains a fail-closed aggregate ceiling — `max_files` (refused
+  before any fetch) and `max_total_bytes` (a running ceiling that aborts before writing the chunk
+  that would cross it) — so a hostile or runaway manifest can't enumerate unbounded chunks/files
+  to exhaust disk. Defaults are generous (4 GiB / 100k files) and configurable via
+  `EdgeProcSettings`; `sync` behavior on a legitimate bundle is unchanged.
 - **Signed-pointer identity binding + monotonic sequence (opt-in, backward-compatible).**
   `VersionPointer` gains three optional fields — `bundle_id`, `channel`, `sequence` — folded
   into the signed bytes only when set (`pointer_signing_bytes`), so a pointer that binds none
