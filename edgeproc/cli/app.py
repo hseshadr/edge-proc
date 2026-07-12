@@ -80,14 +80,21 @@ def sync(
         Path | None,
         typer.Option(help="Also reassemble every file from the synced cache into this dir."),
     ] = None,
+    expected_bundle_id: Annotated[
+        str | None, typer.Option(help="Pin the pointer's bound bundle_id (else accept any).")
+    ] = None,
+    expected_channel: Annotated[
+        str | None, typer.Option(help="Pin the pointer's bound release channel (else accept any).")
+    ] = None,
     pretty: Annotated[bool, typer.Option(help="Print a human summary instead of JSON.")] = False,
 ) -> None:
     """Pull a signed pointer, diff + fetch only missing chunks, verify, atomically swap.
 
     Refuses to sync without a pinned trust root (``--key`` or the env var): an
-    unverifiable sync is rejected fail-closed. ``--materialize-to`` reassembles the
-    synced files (fail-closed on a reassembly mismatch) so a follow-on ``route`` can
-    read them by path. Exit 0 on success, 1 otherwise.
+    unverifiable sync is rejected fail-closed. ``--expected-bundle-id``/``--expected-channel``
+    pin the pointer's bound identity, refusing a cross-bundle replay. ``--materialize-to``
+    reassembles the synced files (fail-closed on a reassembly mismatch) so a follow-on
+    ``route`` can read them by path. Exit 0 on success, 1 otherwise.
     """
     try:
         # Imported lazily so the core install stays light: these belong to the optional
@@ -100,7 +107,15 @@ def sync(
     verifier = Ed25519Verifier.from_public_bytes(_resolve_trust_key(key).read_bytes())
     store = FilesystemCacheStore(cache_dir)
     adapter = HttpAdapter() if http else FilesystemAdapter()
-    result = _run_sync(base_url, store, adapter, verifier, close=http)
+    result = _run_sync(
+        base_url,
+        store,
+        adapter,
+        verifier,
+        close=http,
+        expected_bundle_id=expected_bundle_id,
+        expected_channel=expected_channel,
+    )
     if materialize_to is not None:
         _materialize_active(store, materialize_to)
     typer.echo(_render_sync(result, pretty=pretty))
@@ -113,13 +128,23 @@ def publish(
     key: Annotated[Path, typer.Option(help="Ed25519 raw private key to sign the pointer with.")],
     bundle_id: Annotated[str, typer.Option(help="Bundle identifier recorded in the manifest.")],
     version: Annotated[str, typer.Option(help="Bundle version recorded in the pointer.")],
+    channel: Annotated[
+        str | None, typer.Option(help="Release channel to BIND into the signed pointer.")
+    ] = None,
+    sequence: Annotated[
+        int | None, typer.Option(help="Monotonic freshness counter to bind into the pointer.")
+    ] = None,
+    bind_identity: Annotated[
+        bool, typer.Option(help="Bind bundle_id into the signed pointer (opt-in identity pin).")
+    ] = False,
     pretty: Annotated[bool, typer.Option(help="Print a human summary instead of JSON.")] = False,
 ) -> None:
     """Chunk + sign every file under ``--src`` into a content-addressed origin dir.
 
     The counterpart to ``sync``: produces the ``/latest`` + ``/manifest`` + ``/chunk``
-    an ``edgeproc sync`` consumes. A missing/invalid key or src fails closed (exit 1,
-    no traceback); exit 0 on success.
+    an ``edgeproc sync`` consumes. ``--bind-identity``/``--channel``/``--sequence`` are
+    opt-in: without them the signed pointer is byte-identical to the legacy format. A
+    missing/invalid key or src fails closed (exit 1, no traceback); exit 0 on success.
     """
     try:
         # Lazy: the bundles substrate is an optional extra, not a core dependency.
@@ -137,6 +162,9 @@ def publish(
         signer=signer,
         bundle_id=bundle_id,
         version=version,
+        channel=channel,
+        sequence=sequence,
+        bind_identity=bind_identity,
     )
     typer.echo(_render_pointer(pointer, pretty=pretty))
 
@@ -274,6 +302,8 @@ def _run_sync(
     verifier: Verifier,
     *,
     close: bool,
+    expected_bundle_id: str | None = None,
+    expected_channel: str | None = None,
 ) -> SyncResult:
     """Run ``sync_index``; map signature/integrity/fetch failures to exit 1, no traceback."""
     import httpx  # noqa: PLC0415
@@ -283,7 +313,14 @@ def _run_sync(
     from edgeproc.bundles.sync import sync_index  # noqa: PLC0415
 
     try:
-        return sync_index(base_url=base_url, store=store, adapter=adapter, verifier=verifier)
+        return sync_index(
+            base_url=base_url,
+            store=store,
+            adapter=adapter,
+            verifier=verifier,
+            expected_bundle_id=expected_bundle_id,
+            expected_channel=expected_channel,
+        )
     except (SignatureError, IntegrityError, httpx.HTTPError, OSError) as exc:
         _fail(f"sync failed: {exc}")
     finally:

@@ -22,7 +22,7 @@ from typer.testing import CliRunner
 
 from edgeproc.bundles.cas import FilesystemCacheStore
 from edgeproc.bundles.chunking import GearCDC
-from edgeproc.bundles.manifest import VersionPointer, canonical_bytes
+from edgeproc.bundles.manifest import VersionPointer, pointer_signing_bytes
 from edgeproc.bundles.publish import build_bundle
 from edgeproc.bundles.signing import (
     Ed25519Signer,
@@ -100,7 +100,9 @@ def test_build_bundle_is_deterministic(tmp_path: Path) -> None:
 def test_pointer_signature_verifies_and_rejects_other_key(tmp_path: Path) -> None:
     private, public = generate_keypair()
     pointer = _publish(tmp_path / "origin", Ed25519Signer(private), _FILES, "1.0.0")
-    signed = canonical_bytes(pointer, exclude={"signature"})
+    # The signed preimage is `pointer_signing_bytes` (identity-aware), not the naive
+    # `canonical_bytes(exclude={"signature"})` — the two now differ by the null identity keys.
+    signed = pointer_signing_bytes(pointer)
 
     Ed25519Verifier.from_public_bytes(public.public_bytes_raw()).verify(signed, pointer.signature)
     _other_private, other_public = generate_keypair()
@@ -235,6 +237,77 @@ def test_cli_publish_malformed_key_fails_closed(tmp_path: Path) -> None:
     assert result.exit_code == 1
     assert "Traceback" not in result.stderr
     assert "malformed signing key" in result.stderr  # malformed-key branch
+
+
+def test_cli_publish_bind_identity_then_sync_with_matching_pin(tmp_path: Path) -> None:
+    """`--bind-identity`/`--channel`/`--sequence` + a matching `--expected-*` pin round-trips."""
+    src = _write_src(tmp_path / "src", _FILES)
+    keys = tmp_path / "keys"
+    assert runner.invoke(app, ["keygen", "--out", str(keys)]).exit_code == 0
+    origin = tmp_path / "origin"
+    pub = runner.invoke(
+        app,
+        [
+            "publish",
+            "--src", str(src),
+            "--origin-dir", str(origin),
+            "--key", str(keys / "private.key"),
+            "--bundle-id", "b",
+            "--version", "1.0.0",
+            "--bind-identity",
+            "--channel", "stable",
+            "--sequence", "3",
+        ],
+    )  # fmt: skip
+    assert pub.exit_code == 0, pub.stdout
+
+    sync = runner.invoke(
+        app,
+        [
+            "sync",
+            "--base-url", str(origin),
+            "--cache-dir", str(tmp_path / "cache"),
+            "--key", str(keys / "public.key"),
+            "--expected-bundle-id", "b",
+            "--expected-channel", "stable",
+        ],
+    )  # fmt: skip
+    assert sync.exit_code == 0, sync.stdout
+
+
+def test_cli_sync_rejects_mismatched_expected_bundle_id(tmp_path: Path) -> None:
+    """A cross-bundle replay is refused fail-closed (exit 1, no traceback)."""
+    src = _write_src(tmp_path / "src", _FILES)
+    keys = tmp_path / "keys"
+    assert runner.invoke(app, ["keygen", "--out", str(keys)]).exit_code == 0
+    origin = tmp_path / "origin"
+    pub = runner.invoke(
+        app,
+        [
+            "publish",
+            "--src", str(src),
+            "--origin-dir", str(origin),
+            "--key", str(keys / "private.key"),
+            "--bundle-id", "b",
+            "--version", "1.0.0",
+            "--bind-identity",
+        ],
+    )  # fmt: skip
+    assert pub.exit_code == 0, pub.stdout
+
+    sync = runner.invoke(
+        app,
+        [
+            "sync",
+            "--base-url", str(origin),
+            "--cache-dir", str(tmp_path / "cache"),
+            "--key", str(keys / "public.key"),
+            "--expected-bundle-id", "not-b",
+        ],
+    )  # fmt: skip
+    assert sync.exit_code == 1
+    assert "Traceback" not in sync.stderr
+    assert "sync failed" in sync.stderr
 
 
 def _fs_adapter() -> object:

@@ -28,6 +28,7 @@ from edgeproc.bundles.manifest import (
     VersionPointer,
     canonical_bytes,
     manifest_digest,
+    pointer_signing_bytes,
 )
 
 if TYPE_CHECKING:
@@ -44,12 +45,28 @@ def build_bundle(
     signer: Signer,
     bundle_id: str,
     version: str,
+    channel: str | None = None,
+    sequence: int | None = None,
+    bind_identity: bool = False,
 ) -> VersionPointer:
-    """Chunk + store ``files``, sign the manifest pointer, lay out the flat origin."""
+    """Chunk + store ``files``, sign the manifest pointer, lay out the flat origin.
+
+    ``bind_identity`` (opt-in) stamps ``bundle_id`` into the SIGNED pointer so it cannot be
+    cross-applied to another bundle; ``channel``/``sequence`` bind a release channel and a
+    monotonic freshness counter. All three are excluded from the signed bytes when unset, so
+    the default call produces the byte-identical legacy pointer and no consumer is affected.
+    """
     entries = [_file_entry(path, data, chunker, store) for path, data in files.items()]
     manifest = IndexManifest(bundle_id=bundle_id, version=version, files=entries)
     store.put_manifest(canonical_bytes(manifest))
-    pointer = _sign_pointer(manifest_digest(manifest), version, signer)
+    pointer = _sign_pointer(
+        manifest_digest(manifest),
+        version,
+        signer,
+        bundle_id=bundle_id if bind_identity else None,
+        channel=channel,
+        sequence=sequence,
+    )
     _lay_out_origin(store, manifest, pointer)
     return pointer
 
@@ -68,11 +85,30 @@ def _file_entry(
     )
 
 
-def _sign_pointer(digest: str, version: str, signer: Signer) -> VersionPointer:
-    """Sign the canonical (signature-excluded) pointer bytes; return the signed pointer."""
-    unsigned = VersionPointer(manifest_hash=digest, version=version, signature="")
-    signature = signer.sign(canonical_bytes(unsigned, exclude={"signature"}))
-    return VersionPointer(manifest_hash=digest, version=version, signature=signature)
+def _sign_pointer(
+    digest: str,
+    version: str,
+    signer: Signer,
+    *,
+    bundle_id: str | None,
+    channel: str | None,
+    sequence: int | None,
+) -> VersionPointer:
+    """Sign the (signature-excluded) pointer bytes; return the signed pointer.
+
+    The preimage comes from :func:`pointer_signing_bytes`, which excludes any identity /
+    freshness field left ``None`` — so an unbound pointer signs the exact legacy bytes.
+    """
+    unsigned = VersionPointer(
+        manifest_hash=digest,
+        version=version,
+        bundle_id=bundle_id,
+        channel=channel,
+        sequence=sequence,
+        signature="",
+    )
+    signature = signer.sign(pointer_signing_bytes(unsigned))
+    return unsigned.model_copy(update={"signature": signature})
 
 
 def _lay_out_origin(

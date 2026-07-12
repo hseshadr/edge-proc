@@ -175,7 +175,7 @@ class FilesystemCacheStore:
         bundle is ever rejected.
         """
         active = self.read_active()
-        if active is not None and _is_downgrade(pointer.version, active.version):
+        if active is not None and _is_downgrade(pointer, active):
             raise RollbackError(
                 f"refusing rollback: {pointer.version} is older than active {active.version}"
             )
@@ -212,12 +212,25 @@ class FilesystemCacheStore:
         return removed
 
 
-def _is_downgrade(incoming: str, active: str) -> bool:
-    """True iff ``incoming`` is a provably-older version than ``active`` (PEP 440).
+def _is_downgrade(incoming: VersionPointer, active: VersionPointer) -> bool:
+    """True iff ``incoming`` is provably older than ``active`` — by sequence OR version.
 
-    Fail-open on unparseable versions: if either side is not PEP 440, we cannot prove a
-    downgrade, so we do NOT reject — the covenant forbids rejecting a valid signed bundle.
+    A strictly-lower monotonic ``sequence`` is a provable downgrade (equal is idempotent
+    re-promote, allowed). Otherwise fall back to PEP 440. Fail-open on anything unprovable:
+    the covenant forbids rejecting a valid signed bundle.
     """
+    return _sequence_downgrade(incoming.sequence, active.sequence) or _version_downgrade(
+        incoming.version, active.version
+    )
+
+
+def _sequence_downgrade(incoming: int | None, active: int | None) -> bool:
+    """A strictly-lower monotonic sequence is a provable downgrade; equal/missing is not."""
+    return incoming is not None and active is not None and incoming < active
+
+
+def _version_downgrade(incoming: str, active: str) -> bool:
+    """True iff ``incoming`` is a provably-older PEP 440 version than ``active``."""
     try:
         return Version(incoming) < Version(active)
     except InvalidVersion:
