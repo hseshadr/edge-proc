@@ -50,6 +50,22 @@ def test_keygen_writes_private_key_owner_only(tmp_path: Path) -> None:
     assert (tmp_path / "public.key").is_file()
 
 
+def test_keygen_refuses_symlinked_key_path(tmp_path: Path) -> None:
+    # An attacker pre-plants a symlink where private.key will be written, aimed at a victim
+    # file. keygen must NOT follow it (O_NOFOLLOW): it fails closed and the victim is intact.
+    victim = tmp_path / "victim.txt"
+    victim.write_bytes(b"SECRET-ORIGINAL")
+    out = tmp_path / "keys"
+    out.mkdir()
+    (out / "private.key").symlink_to(victim)
+
+    result = runner.invoke(app, ["keygen", "--out", str(out)])
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.stderr
+    assert victim.read_bytes() == b"SECRET-ORIGINAL"  # the symlink target was NOT clobbered
+
+
 def _save_catalog_index(directory: Path) -> None:
     encoder = FakeEncoder()
     index = FaissVectorIndex("catalog", IndexConfig(dimension=encoder.dim))

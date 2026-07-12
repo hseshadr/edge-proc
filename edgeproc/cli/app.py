@@ -178,21 +178,35 @@ def keygen(
 
     out.mkdir(parents=True, exist_ok=True)
     private, public = generate_keypair()
-    _write_secret(out / "private.key", private.private_bytes_raw())
-    (out / "public.key").write_bytes(public.public_bytes_raw())
+    try:
+        _write_secret(out / "private.key", private.private_bytes_raw())
+        _write_no_follow(out / "public.key", public.public_bytes_raw(), 0o644)
+    except OSError as exc:  # e.g. a pre-planted symlink at a key path (O_NOFOLLOW → ELOOP)
+        _fail(f"could not write key files under {out}: {exc}")
     typer.echo(f"wrote {out / 'private.key'} and {out / 'public.key'}")
 
 
 def _write_secret(path: Path, data: bytes) -> None:
     """Write a secret file readable/writable by its owner ONLY (mode ``0600``).
 
-    A signing key must never be world-readable: ``os.open`` creates it 0600 up front and
-    ``os.chmod`` re-asserts 0600 even if the file pre-existed or an umask loosened it.
+    A signing key must never be world-readable: the file is created 0600 up front and
+    ``os.chmod`` re-asserts 0600 even if it pre-existed or an umask loosened it.
     """
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    _write_no_follow(path, data, 0o600)
+    os.chmod(path, 0o600)
+
+
+def _write_no_follow(path: Path, data: bytes, mode: int) -> None:
+    """Create+write ``path`` refusing to follow a symlink at the final component.
+
+    ``O_NOFOLLOW`` makes ``os.open`` fail (ELOOP) when ``path`` is a symlink, so an
+    attacker-planted symlink at a key path cannot redirect the write onto a victim file.
+    Portable: on a platform lacking the flag ``getattr`` yields 0 (a no-op bit).
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags, mode)
     with os.fdopen(fd, "wb") as handle:
         handle.write(data)
-    os.chmod(path, 0o600)
 
 
 @app.command()
