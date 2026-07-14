@@ -26,7 +26,7 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import ClassVar, Protocol, runtime_checkable
 
 import zstandard
 from packaging.version import InvalidVersion, Version
@@ -39,10 +39,19 @@ from edgeproc.bundles.manifest import (
     validate_sha256_hex,
 )
 from edgeproc.core.settings import EdgeProcSettings
+from edgeproc.errors import BUNDLE_INTEGRITY_FAILED
 
 
 class IntegrityError(Exception):
-    """A stored object failed its content-address / decompress check (fail-closed)."""
+    """A stored object failed its content-address / decompress check (fail-closed).
+
+    Carries the canonical ``bundle.integrity_failed`` code (``shared_libs_python.errors``)
+    so a consumer can render it to RFC 9457 via :func:`edgeproc.errors.problem_details_for`.
+    The code is metadata only — the exception's type and message are unchanged, so every
+    existing ``except IntegrityError`` handler behaves exactly as before.
+    """
+
+    code: ClassVar[str] = BUNDLE_INTEGRITY_FAILED
 
 
 class RollbackError(IntegrityError):
