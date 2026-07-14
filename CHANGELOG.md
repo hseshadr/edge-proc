@@ -4,6 +4,13 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
 
 ## [Unreleased]
 
+- **`__version__` re-synced to the released version and single-sourced.**
+  `edgeproc.__version__` — and with it the `edgeproc version` CLI output and the
+  `runtime_version` stamped into every `ResultEnvelope`'s provenance — had been stuck at
+  `0.1.1` while the package shipped `0.1.3`. The version now lives only in
+  `edgeproc/_version.py`; hatchling reads it at build time (`dynamic = ["version"]`), so the
+  installed metadata and `__version__` are one value by construction. A regression test pins
+  `importlib.metadata.version("edge-proc") == edgeproc.__version__`.
 - **Single-point trust-boundary hardening.** Bundle models now reject non-canonical SHA-256
   values for chunk, file, and manifest digests; direct CAS calls validate digests and resolve
   every object path inside the store root, including symlinked storage directories. Monotonic
