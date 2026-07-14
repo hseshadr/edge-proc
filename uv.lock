@@ -437,7 +437,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.5" },
     { name = "rank-bm25", marker = "extra == 'localvec'", specifier = ">=0.2" },
     { name = "sentence-transformers", marker = "extra == 'localvec'", specifier = ">=5.6.0" },
-    { name = "shared-libs-python", git = "https://github.com/hseshadr/shared-libs-python.git?tag=v0.1.3" },
+    { name = "shared-libs-python", git = "https://github.com/hseshadr/shared-libs-python.git?rev=c5cef2b67ec6090cf698e9fe486446d172882590" },
     { name = "structlog", marker = "extra == 'bundles'", specifier = ">=26.1.0" },
     { name = "typer", specifier = ">=0.26.8" },
     { name = "zstandard", marker = "extra == 'bundles'", specifier = ">=0.25" },
@@ -1542,8 +1542,8 @@ wheels = [
 
 [[package]]
 name = "shared-libs-python"
-version = "0.1.3"
-source = { git = "https://github.com/hseshadr/shared-libs-python.git?tag=v0.1.3#0ba9ba8c945b55073474322c353d838cf7b3dbba" }
+version = "0.1.4"
+source = { git = "https://github.com/hseshadr/shared-libs-python.git?rev=c5cef2b67ec6090cf698e9fe486446d172882590#c5cef2b67ec6090cf698e9fe486446d172882590" }
 dependencies = [
     { name = "pydantic" },
 ]
