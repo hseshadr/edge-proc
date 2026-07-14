@@ -4,6 +4,8 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
 
 ## [Unreleased]
 
+## [0.1.4] — 2026-07-13
+
 - **`__version__` re-synced to the released version and single-sourced.**
   `edgeproc.__version__` — and with it the `edgeproc version` CLI output and the
   `runtime_version` stamped into every `ResultEnvelope`'s provenance — had been stuck at
