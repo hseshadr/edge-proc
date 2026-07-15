@@ -23,7 +23,7 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.5",
     "typer>=0.26.8",
-    "shared-libs-python>=0.1.4",  # >=0.1.4 line ships shared_libs_python.errors (canonical errors)
+    "shared-libs-python>=0.2.0",  # >=0.2.0 ships shared_libs_python.errors (canonical errors)
 ]
 
 [project.optional-dependencies]
@@ -63,10 +63,10 @@ Issues = "https://github.com/hseshadr/edge-proc/issues"
 
 [tool.uv.sources]
 # Open-source onboarding: clone ONLY this repo and `uv sync` — shared-libs-python
-# is pulled from public GitHub (it is not on PyPI). Pinned to the exact commit that
-# adds the canonical-errors module (shared_libs_python.errors); it sits one commit
-# past the v0.1.4 tag, so an immutable rev keeps external clones + CI reproducible.
-shared-libs-python = { git = "https://github.com/hseshadr/shared-libs-python.git", rev = "c5cef2b67ec6090cf698e9fe486446d172882590" }
+# is pulled from public GitHub (it is not on PyPI). Pinned to the v0.2.0 release
+# tag, which ships the canonical-errors module (shared_libs_python.errors); an
+# immutable tag keeps external clones + CI reproducible.
+shared-libs-python = { git = "https://github.com/hseshadr/shared-libs-python.git", tag = "v0.2.0" }
 
 # Co-developing shared-libs-python locally? Clone it next to this repo and swap the
 # line above for a path source (uncomment):
