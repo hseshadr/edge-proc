@@ -4,6 +4,16 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
 
 ## [Unreleased]
 
+### Added
+- **Canonical, portable integrity failures.** Bundle-integrity exceptions now
+  carry the shared `bundle.integrity_failed` code and can be rendered as RFC
+  9457 Problem Details without changing their existing Python type or message.
+
+### Changed
+- **The shared error dependency now resolves from its released v0.2.0 tag.**
+  Fresh clones and CI consume the same immutable public release instead of the
+  temporary pre-release commit pin.
+
 ## [0.1.4] — 2026-07-13
 
 - **`__version__` re-synced to the released version and single-sourced.**
