@@ -22,6 +22,28 @@ index files over the internet and check, with cryptography, that nobody tampered
 along the way. Think of it like an app store that verifies the signature on an update
 before installing it — except for your search index.
 
+## Northstar status (verified 2026-07-16)
+
+**EdgeProc now has an explicit memory-admission boundary for concurrent work.**
+`MemoryManager` reserves each task's declared memory budget before dispatch, rejects
+work that would exceed `max_in_flight_memory_mb`, and releases reservations on every
+success and exception path. The change is merged as `f3e3ca9` and the hosted main CI
+run passed.
+
+Run the same proof locally:
+
+```bash
+uv sync --all-extras
+uv run poe gate
+uv run python benchmarks/northstar.py
+```
+
+The current gate is 255 tests with 98.72% coverage; the benchmark reports sub-0.1 ms
+search p95, 47.8 ms cold-sync p95, 15.6 ms warm-sync p95, and 114.2 MiB peak RSS
+against a 512 MiB admission budget. That budget is deterministic admission control,
+not a promise to cap native FAISS/NumPy allocations; the host or container owns RSS,
+CPU, and process-level termination.
+
 ## Where it fits
 
 EdgeProc is the reusable **substrate** that makes on-device compute possible: it ships your
