@@ -22,8 +22,8 @@ do not provide cross-bundle identity protection.
 
 Before promotion, EdgeProc verifies the pointer signature, pinned identity, manifest hash,
 manifest identity, every chunk hash, and complete file reassembly. Paths are contained
-under the selected root. HTTP bodies, decompressed chunks, aggregate sync bytes, file
-counts, and lock waits have hard ceilings. A shared filesystem mutation lock serializes
+under the selected root. HTTP bodies, decompressed chunks, aggregate sync bytes,
+materialized file bytes, file counts, and lock waits have hard ceilings. A shared filesystem mutation lock serializes
 publish, sync, promote, garbage collection, and CLI materialization across cooperating
 threads and processes, so a stale last writer cannot bypass the rollback check.
 
@@ -59,7 +59,7 @@ responsibility.
   typed `IntegrityError` and the caller should retry with jitter.
 - **Resource ceilings:** defaults are a 30-second HTTP client timeout per network
   operation, 256 MiB per response, 64 MiB decompressed per chunk, 4 GiB and 100,000 files
-  per sync, and a 30-second mutation lock wait. Total sync time still scales with the
+  per sync, 256 MiB per materialized file, and a 30-second mutation lock wait. Total sync time still scales with the
   signed chunk count and origin latency. Operators should lower these limits for smaller
   catalogs and place a host-level deadline around the command when they require one.
 - **Materialization:** CAS activation is atomic; writing a multi-file

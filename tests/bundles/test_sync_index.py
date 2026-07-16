@@ -221,3 +221,17 @@ def test_materialize_file_fail_closed_on_unknown_path(tmp_path: Path) -> None:
     sync_index(base_url=str(origin), store=store, adapter=FilesystemAdapter(), verifier=verifier)
     with pytest.raises(KeyError):
         materialize_file(store, _manifest_at(origin, pointer), "nope.bin")
+
+
+def test_materialize_file_refuses_files_over_memory_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    origin, pointer, verifier = _setup(tmp_path, _FILES)
+    store = FilesystemCacheStore(tmp_path / "cache")
+    sync_index(base_url=str(origin), store=store, adapter=FilesystemAdapter(), verifier=verifier)
+    monkeypatch.setenv("EDGEPROC_MAX_MATERIALIZE_BYTES", "1024")
+
+    from edgeproc.bundles.sync import SyncCapError  # noqa: PLC0415
+
+    with pytest.raises(SyncCapError, match="materialize"):
+        materialize_file(store, _manifest_at(origin, pointer), "index.faiss")
