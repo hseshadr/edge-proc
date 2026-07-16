@@ -23,6 +23,8 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
   not facade-level preemption or whole-process memory enforcement.
 - **Workflow actions are immutable.** CI, gitleaks, and scheduled dependency-audit
   actions are pinned to full commit SHAs, with a regression test that rejects moving tags.
+- **Security lock refresh.** `setuptools` is locked at 83.0.0, clearing
+  PYSEC-2026-3447 reported by the exact-branch dependency audit.
 
 ## [0.1.4] — 2026-07-13
 
