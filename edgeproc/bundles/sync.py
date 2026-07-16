@@ -161,12 +161,25 @@ def _fetch_missing(
     return fetched
 
 
+def _verify_entry_reassembly(entry: FileEntry, store: CacheStore, max_bytes: int) -> None:
+    """Hash one file incrementally, keeping memory at one chunk plus the digest."""
+    if entry.size > max_bytes:
+        raise SyncCapError(f"file {entry.path} exceeds materialize memory cap {max_bytes} bytes")
+    digest = hashlib.sha256()
+    size = 0
+    for ref in entry.chunks:
+        chunk = store.get_chunk(ref.hash)
+        size += len(chunk)
+        digest.update(chunk)
+    if size != entry.size or digest.hexdigest() != entry.file_sha256:
+        raise IntegrityError(f"file {entry.path} failed reassembly check")
+
+
 def _verify_reassembly(manifest: IndexManifest, store: CacheStore) -> None:
-    """Reassembly-on-read check: each file's chunks concat to its ``file_sha256``."""
+    """Reassembly-on-read check without joining an unbounded file in memory."""
+    max_bytes = EdgeProcSettings().max_materialize_bytes
     for entry in manifest.files:
-        blob = b"".join(store.get_chunk(ref.hash) for ref in entry.chunks)
-        if _sha256(blob) != entry.file_sha256:
-            raise IntegrityError(f"file {entry.path} failed reassembly check")
+        _verify_entry_reassembly(entry, store, max_bytes)
 
 
 def sync_index(
@@ -232,10 +245,13 @@ def _sync_locked(
 
 
 def materialize_file(store: CacheStore, manifest: IndexManifest, path: str) -> bytes:
-    """Reassemble a synced file's bytes on demand from its chunks (fail-closed)."""
+    """Reassemble one file, refusing allocations above the configured memory cap."""
     entry = _file_entry(manifest, path)
+    max_bytes = EdgeProcSettings().max_materialize_bytes
+    if entry.size > max_bytes:
+        raise SyncCapError(f"file {path} exceeds materialize memory cap {max_bytes} bytes")
     blob = b"".join(store.get_chunk(ref.hash) for ref in entry.chunks)
-    if _sha256(blob) != entry.file_sha256:
+    if len(blob) != entry.size or _sha256(blob) != entry.file_sha256:
         raise IntegrityError(f"file {path} failed reassembly check")
     return blob
 
