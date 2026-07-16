@@ -28,9 +28,10 @@ def test_readme_links_the_operations_contract() -> None:
     assert "docs/OPERATIONS.md" in _read("README.md")
 
 
-def test_budget_copy_does_not_claim_unimplemented_enforcement() -> None:
+def test_budget_copy_distinguishes_admission_from_native_rss_enforcement() -> None:
     readme = _read("README.md")
-    assert "declaration, not an enforcement boundary" in readme
+    assert "MemoryManager" in readme
+    assert "not an enforcement boundary for allocations inside FAISS" in readme
 
 
 def test_operations_contract_links_a_repeatable_benchmark() -> None:

@@ -58,6 +58,9 @@ class EdgeProcSettings(BaseSettings):
     # A caller asking to materialize one file receives bytes, so keep that explicit
     # allocation bounded even when a signed manifest contains many chunks.
     max_materialize_bytes: int = 256 * 1024 * 1024
+    # Sum of declared task reservations admitted concurrently by one EdgeProc instance.
+    # This is deterministic admission control, not a portable native-RSS hard limit.
+    max_in_flight_memory_mb: int = 512
     # Cross-process filesystem mutation lock. A wedged peer fails retryably instead of
     # making sync/promote/GC wait forever.
     mutation_lock_timeout: float = 30.0

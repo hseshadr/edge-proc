@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from edgeproc._version import __version__
 from edgeproc.core.facade import EdgeProc
+from edgeproc.core.memory import MemoryBudgetExceededError, MemoryManager
 from edgeproc.core.models import (
     CapabilityVerdict,
     PrivacyMode,
@@ -30,6 +31,8 @@ __all__ = [
     "CapabilityVerdict",
     "DefaultRouter",
     "EdgeProc",
+    "MemoryBudgetExceededError",
+    "MemoryManager",
     "NullSink",
     "PrivacyMode",
     "Provenance",

@@ -12,6 +12,7 @@ _VARS = (
     "EDGEPROC_HTTP_TIMEOUT",
     "EDGEPROC_TASK_BUDGET_MS",
     "EDGEPROC_TASK_BUDGET_MEMORY_MB",
+    "EDGEPROC_MAX_IN_FLIGHT_MEMORY_MB",
     "EDGEPROC_RRF_K_WINDOW",
     "HF_TOKEN",
 )
@@ -30,6 +31,7 @@ def test_defaults_match_the_canonical_local_stack(monkeypatch: pytest.MonkeyPatc
     assert settings.task_budget_ms == 5000
     assert settings.task_budget_memory_mb == 256
     assert settings.max_materialize_bytes == 256 * 1024 * 1024
+    assert settings.max_in_flight_memory_mb == 512
     assert settings.rrf_k_window == 60
 
 
@@ -40,6 +42,7 @@ def test_env_overrides_are_read_with_the_edgeproc_prefix(monkeypatch: pytest.Mon
     monkeypatch.setenv("EDGEPROC_TASK_BUDGET_MS", "9000")
     monkeypatch.setenv("EDGEPROC_TASK_BUDGET_MEMORY_MB", "512")
     monkeypatch.setenv("EDGEPROC_MAX_MATERIALIZE_BYTES", "1024")
+    monkeypatch.setenv("EDGEPROC_MAX_IN_FLIGHT_MEMORY_MB", "64")
     monkeypatch.setenv("EDGEPROC_RRF_K_WINDOW", "30")
 
     settings = EdgeProcSettings(_env_file=None)
@@ -50,6 +53,7 @@ def test_env_overrides_are_read_with_the_edgeproc_prefix(monkeypatch: pytest.Mon
     assert settings.task_budget_ms == 9000
     assert settings.task_budget_memory_mb == 512
     assert settings.max_materialize_bytes == 1024
+    assert settings.max_in_flight_memory_mb == 64
     assert settings.rrf_k_window == 30
 
 
