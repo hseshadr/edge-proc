@@ -201,9 +201,12 @@ prove which runtime touched a request. (Useful when a regulator, or future you, 
 ### The typed result and the Task/budget model
 
 A `Task` carries its `kind` (`EMBED` / `SEARCH` / `RANK`), a `payload`, a `privacy_mode`,
-and a latency/memory **budget declaration**. In v0 that declaration is available to
-runtimes for rejection, enforcement, and telemetry; the facade does not preempt a running
-runtime or police process RSS. It is a declaration, not an enforcement boundary. Every run returns a typed
+and a latency/memory **budget declaration**. `EdgeProc` admits work through a
+thread-safe `MemoryManager`: the sum of declared in-flight reservations cannot exceed
+`max_in_flight_memory_mb`, and every reservation releases in a `finally`-safe context.
+This is deterministic admission control, not a native-RSS limit: the budget remains a
+declaration, not an enforcement boundary for allocations inside FAISS, NumPy, or another
+native runtime. Share one `MemoryManager` across facades when they share a process. Every run returns a typed
 `ResultEnvelope` — a structured object with `success`, the serving `runtime`, `latency`,
 and the `payload` — not a loose dict. Typed in, typed out.
 
@@ -284,6 +287,7 @@ so an embedded library coexists with the application's own environment. Env vars
 | `mutation_lock_timeout` | `EDGEPROC_MUTATION_LOCK_TIMEOUT` | `30.0` | Bounded cross-process publish/sync/promote/GC lock wait (s). |
 | `task_budget_ms` | `EDGEPROC_TASK_BUDGET_MS` | `5000` | Default per-task latency budget. |
 | `task_budget_memory_mb` | `EDGEPROC_TASK_BUDGET_MEMORY_MB` | `256` | Default per-task memory budget. |
+| `max_in_flight_memory_mb` | `EDGEPROC_MAX_IN_FLIGHT_MEMORY_MB` | `512` | Sum of declared task reservations admitted concurrently by one `EdgeProc` instance. |
 | `max_materialize_bytes` | `EDGEPROC_MAX_MATERIALIZE_BYTES` | `256 MiB` | Maximum one file materialized into a returned `bytes` value. |
 | `rrf_k_window` | `EDGEPROC_RRF_K_WINDOW` | `60` | RRF rank-window constant for hybrid fusion. |
 | `trust_root_pubkey_path` | `EDGEPROC_TRUST_ROOT_PUBKEY_PATH` | `None` | Pinned sync trust-root pubkey (no key ⇒ `sync` refused). |

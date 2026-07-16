@@ -73,9 +73,11 @@ responsibility.
 
 EdgeProc has no independent uptime SLA because it is an embedded library. The host owns
 origin redundancy, retry policy, alerting, disk monitoring, model warm-up, process
-supervision, and end-user SLOs. `Task.budget_ms` and `Task.budget_memory_mb` are a
-declaration for runtime selection/telemetry, not an enforcement boundary in v0; a runtime
-must explicitly reject or enforce them.
+supervision, and end-user SLOs. `MemoryManager` enforces the sum of declared in-flight
+task reservations for one `EdgeProc` instance and releases each reservation on every exit
+path. It is admission control, not a portable native-RSS limit: the host must still set a
+process/container memory limit and supervise FAISS, NumPy, model loading, and other native
+allocations. Share one manager across facades that share a process boundary.
 
 ## Measured performance contract
 

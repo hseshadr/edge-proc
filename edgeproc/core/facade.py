@@ -8,6 +8,7 @@ register a runtime explicitly (e.g. ``EdgeProc(registry)`` with a configured
 from __future__ import annotations
 
 from edgeproc._version import __version__
+from edgeproc.core.memory import BYTES_PER_MEGABYTE, MemoryBudgetExceededError, MemoryManager
 from edgeproc.core.models import DEFAULT_SIGNATURE_STATUS, Provenance, ResultEnvelope, Task
 from edgeproc.core.protocols import Router, Runtime, TelemetrySink
 from edgeproc.core.registry import RuntimeRegistry
@@ -23,6 +24,7 @@ class EdgeProc:
         registry: RuntimeRegistry,
         router: Router | None = None,
         sink: TelemetrySink | None = None,
+        memory_manager: MemoryManager | None = None,
     ) -> None:
         self._registry = registry
         # Identity (`is not None`), never truthiness: a real but empty BufferedSink has
@@ -30,6 +32,12 @@ class EdgeProc:
         # default and drop their telemetry. The None check guards that data-loss bug.
         self._router = router if router is not None else DefaultRouter()
         self._sink = sink if sink is not None else NullSink()
+        self._memory_manager = memory_manager if memory_manager is not None else MemoryManager()
+
+    @property
+    def memory_manager(self) -> MemoryManager:
+        """The admission controller; share it across facades to share one capacity."""
+        return self._memory_manager
 
     @classmethod
     def local_default(cls) -> EdgeProc:
@@ -38,9 +46,18 @@ class EdgeProc:
 
     async def run(self, task: Task) -> ResultEnvelope:
         runtime = self._router.pick(task, self._registry.runtimes)
-        envelope = await self._dispatch(task, runtime)
+        envelope = await self._run_with_memory(task, runtime)
         self._sink.emit(envelope)
         return envelope
+
+    async def _run_with_memory(self, task: Task, runtime: Runtime | None) -> ResultEnvelope:
+        if runtime is None:
+            return self._no_runtime_envelope(task)
+        try:
+            with self._memory_manager.reserve(task.budget_memory_mb * BYTES_PER_MEGABYTE):
+                return await self._dispatch(task, runtime)
+        except MemoryBudgetExceededError:
+            return self._memory_rejection_envelope(task, runtime)
 
     async def _dispatch(self, task: Task, runtime: Runtime | None) -> ResultEnvelope:
         if runtime is None:
@@ -63,4 +80,22 @@ class EdgeProc:
                 signature_status=DEFAULT_SIGNATURE_STATUS, runtime_version=__version__
             ),
             error="no_runtime_accepted",
+        )
+
+    @staticmethod
+    def _memory_rejection_envelope(task: Task, runtime: Runtime) -> ResultEnvelope:
+        """Report admission refusal without invoking the selected runtime."""
+        return ResultEnvelope(
+            request_id=task.request_id,
+            task_kind=task.kind,
+            success=False,
+            payload={},
+            runtime_used=runtime.name,
+            privacy_mode=task.privacy_mode,
+            confidence=0.0,
+            latency_ms=0.0,
+            provenance=Provenance(
+                signature_status=DEFAULT_SIGNATURE_STATUS, runtime_version=__version__
+            ),
+            error="memory_budget_exceeded",
         )
