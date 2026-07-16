@@ -187,6 +187,31 @@ def sync_index(
     ``max_files`` bound the aggregate a single sync will pull (disk-exhaustion defense);
     unset, they fall back to the generous ``EdgeProcSettings`` defaults.
     """
+    with store.mutation():
+        return _sync_locked(
+            base_url=base_url,
+            store=store,
+            adapter=adapter,
+            verifier=verifier,
+            expected_bundle_id=expected_bundle_id,
+            expected_channel=expected_channel,
+            max_total_bytes=max_total_bytes,
+            max_files=max_files,
+        )
+
+
+def _sync_locked(
+    *,
+    base_url: str,
+    store: CacheStore,
+    adapter: FetchAdapter,
+    verifier: Verifier,
+    expected_bundle_id: str | None,
+    expected_channel: str | None,
+    max_total_bytes: int | None,
+    max_files: int | None,
+) -> SyncResult:
+    """Execute one complete fetch/verify/promote transaction under the store lock."""
     caps = _resolve_caps(max_total_bytes, max_files)
     pointer = _fetch_pointer(base_url, adapter, verifier)
     _check_identity(pointer, expected_bundle_id, expected_channel)

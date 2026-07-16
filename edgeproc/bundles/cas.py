@@ -25,10 +25,13 @@ from __future__ import annotations
 
 import hashlib
 import os
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from typing import ClassVar, Protocol, runtime_checkable
 
 import zstandard
+from filelock import FileLock, Timeout
 from packaging.version import InvalidVersion, Version
 
 from edgeproc.bundles.containment import UnsafePathError, resolve_within
@@ -73,6 +76,7 @@ class CacheStore(Protocol):
     def put_manifest(self, manifest_bytes: bytes) -> str: ...
     def get_manifest(self, manifest_hash: str) -> bytes: ...
     def read_active(self) -> VersionPointer | None: ...
+    def mutation(self) -> AbstractContextManager[None]: ...
     def promote(self, pointer: VersionPointer) -> None: ...
     def gc(self) -> int: ...
 
@@ -112,7 +116,13 @@ def _atomic_write(target: Path, data: bytes) -> None:
 class FilesystemCacheStore:
     """Filesystem ``CacheStore``: ``chunks/<aa>/<hash>``, ``manifests/<hash>``, ``active``."""
 
-    def __init__(self, root: Path, *, max_decompressed_bytes: int | None = None) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        max_decompressed_bytes: int | None = None,
+        mutation_lock_timeout: float | None = None,
+    ) -> None:
         self._root = root
         self._root.mkdir(parents=True, exist_ok=True)
         # FROZEN CAS layout contract: a producer's origin dir and a consumer's cache both
@@ -120,11 +130,18 @@ class FilesystemCacheStore:
         self._prepare_directory("chunks")
         self._prepare_directory("manifests")
         # Decompression-bomb ceiling: a chunk that inflates past this is refused fail-closed.
+        settings = EdgeProcSettings()
         self._max_decompressed_bytes = (
             max_decompressed_bytes
             if max_decompressed_bytes is not None
-            else EdgeProcSettings().max_decompressed_bytes
+            else settings.max_decompressed_bytes
         )
+        timeout = (
+            mutation_lock_timeout
+            if mutation_lock_timeout is not None
+            else settings.mutation_lock_timeout
+        )
+        self._mutation_lock = FileLock(self._store_path(".mutation.lock"), timeout=timeout)
 
     @property
     def root(self) -> Path:
@@ -196,6 +213,12 @@ class FilesystemCacheStore:
         _atomic_write(self._manifest_path(manifest_hash), manifest_bytes)
         return manifest_hash
 
+    def write_atomic(self, relative_path: str, data: bytes) -> None:
+        """Atomically write a contained producer artifact under the store root."""
+        target = self._store_path(relative_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write(target, data)
+
     def get_manifest(self, manifest_hash: str) -> bytes:
         raw = self._manifest_path(manifest_hash).read_bytes()
         if _sha256(raw) != manifest_hash:
@@ -208,9 +231,19 @@ class FilesystemCacheStore:
             return None
         return VersionPointer.model_validate_json(active.read_bytes())
 
+    @contextmanager
+    def mutation(self) -> Iterator[None]:
+        """Serialize cache mutations across threads and processes with a bounded wait."""
+        try:
+            with self._mutation_lock:
+                yield
+        except Timeout as exc:
+            raise IntegrityError("filesystem mutation lock timed out; retry sync") from exc
+
     def promote(self, pointer: VersionPointer) -> None:
-        self._reject_rollback(pointer)
-        _atomic_write(self._store_path("active"), pointer.model_dump_json().encode("utf-8"))
+        with self.mutation():
+            self._reject_rollback(pointer)
+            _atomic_write(self._store_path("active"), pointer.model_dump_json().encode("utf-8"))
 
     def _reject_rollback(self, pointer: VersionPointer) -> None:
         """Refuse a promote whose version is provably OLDER than the active one.
@@ -226,6 +259,10 @@ class FilesystemCacheStore:
             raise RollbackError("refusing rollback or reuse of an active monotonic sequence")
 
     def gc(self) -> int:
+        with self.mutation():
+            return self._gc_locked()
+
+    def _gc_locked(self) -> int:
         active = self.read_active()
         if active is None:
             return 0  # fail-safe: never wipe a store with no promoted version

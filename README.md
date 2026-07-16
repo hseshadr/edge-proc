@@ -201,7 +201,9 @@ prove which runtime touched a request. (Useful when a regulator, or future you, 
 ### The typed result and the Task/budget model
 
 A `Task` carries its `kind` (`EMBED` / `SEARCH` / `RANK`), a `payload`, a `privacy_mode`,
-and a **budget** (max latency in ms, max memory in MB). Every run returns a typed
+and a latency/memory **budget declaration**. In v0 that declaration is available to
+runtimes for rejection, enforcement, and telemetry; the facade does not preempt a running
+runtime or police process RSS. It is a declaration, not an enforcement boundary. Every run returns a typed
 `ResultEnvelope` — a structured object with `success`, the serving `runtime`, `latency`,
 and the `payload` — not a loose dict. Typed in, typed out.
 
@@ -269,9 +271,9 @@ edgeproc route --index-dir materialized/catalog_idx --task task.json --pretty
 ### Configuration: `EdgeProcSettings` + `EDGEPROC_`-prefixed env vars
 
 Deploy-time config is read lazily from the environment / `.env` via `EdgeProcSettings`
-(`edgeproc/core/settings.py`), a Pydantic settings object that **rejects unknown fields
-(fail closed)**. Env vars use the `EDGEPROC_` prefix (except the HF token, which uses the
-ecosystem-standard `HF_TOKEN`):
+(`edgeproc/core/settings.py`). It validates documented settings but ignores unrelated host variables,
+so an embedded library coexists with the application's own environment. Env vars use the
+`EDGEPROC_` prefix (except the HF token, which uses the ecosystem-standard `HF_TOKEN`):
 
 | Setting | Env var | Default | Purpose |
 | --- | --- | --- | --- |
@@ -279,6 +281,7 @@ ecosystem-standard `HF_TOKEN`):
 | `hf_token` | `HF_TOKEN` | `None` | Hugging Face auth token. |
 | `default_k` | `EDGEPROC_DEFAULT_K` | `10` | Default top-k results. |
 | `http_timeout` | `EDGEPROC_HTTP_TIMEOUT` | `30.0` | Bundle HTTP fetch timeout (s). |
+| `mutation_lock_timeout` | `EDGEPROC_MUTATION_LOCK_TIMEOUT` | `30.0` | Bounded cross-process publish/sync/promote/GC lock wait (s). |
 | `task_budget_ms` | `EDGEPROC_TASK_BUDGET_MS` | `5000` | Default per-task latency budget. |
 | `task_budget_memory_mb` | `EDGEPROC_TASK_BUDGET_MEMORY_MB` | `256` | Default per-task memory budget. |
 | `rrf_k_window` | `EDGEPROC_RRF_K_WINDOW` | `60` | RRF rank-window constant for hybrid fusion. |
@@ -306,6 +309,7 @@ module map — see [**docs/ARCHITECTURE.md**](docs/ARCHITECTURE.md) (with d2 dia
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system context, bundle lifecycle, CAS + manifest, module boundaries, seams.
 - [docs/QUICKSTART.md](docs/QUICKSTART.md) — clone → gate → CLI walkthrough of the full `keygen → publish → sync → route` loop in five minutes.
+- [docs/OPERATIONS.md](docs/OPERATIONS.md) — threat model, privacy flow, recovery/SLA ownership, resource ceilings, and measured performance gate.
 - [docs/diagrams/](docs/diagrams/) — d2 sources + rendered SVGs.
 
 ## The stack

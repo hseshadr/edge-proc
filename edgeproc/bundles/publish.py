@@ -56,6 +56,33 @@ def build_bundle(
     monotonic freshness counter. All three are excluded from the signed bytes when unset, so
     the default call produces the byte-identical legacy pointer and no consumer is affected.
     """
+    with store.mutation():
+        return _build_bundle_locked(
+            files=files,
+            store=store,
+            chunker=chunker,
+            signer=signer,
+            bundle_id=bundle_id,
+            version=version,
+            channel=channel,
+            sequence=sequence,
+            bind_identity=bind_identity,
+        )
+
+
+def _build_bundle_locked(
+    *,
+    files: Mapping[str, bytes],
+    store: FilesystemCacheStore,
+    chunker: GearCDC,
+    signer: Signer,
+    bundle_id: str,
+    version: str,
+    channel: str | None,
+    sequence: int | None,
+    bind_identity: bool,
+) -> VersionPointer:
+    """Build and publish one origin snapshot while holding its mutation lock."""
     entries = [_file_entry(path, data, chunker, store) for path, data in files.items()]
     manifest = IndexManifest(bundle_id=bundle_id, version=version, files=entries)
     store.put_manifest(canonical_bytes(manifest))
@@ -124,14 +151,14 @@ def _lay_out_origin(
     root = store.root
     (root / "chunk").mkdir(parents=True, exist_ok=True)
     (root / "manifest").mkdir(parents=True, exist_ok=True)
-    (root / "manifest" / pointer.manifest_hash).write_bytes(canonical_bytes(manifest))
+    store.write_atomic(f"manifest/{pointer.manifest_hash}", canonical_bytes(manifest))
     wanted = {ref.hash for entry in manifest.files for ref in entry.chunks}
     for chunk_hash in wanted:
         dst = root / "chunk" / chunk_hash
         if dst.exists():
             continue
         _link_or_copy(_store_chunk_path(store, chunk_hash), dst)
-    (root / "latest").write_bytes(pointer.model_dump_json().encode("utf-8"))
+    store.write_atomic("latest", pointer.model_dump_json().encode("utf-8"))
 
 
 def _store_chunk_path(store: FilesystemCacheStore, chunk_hash: str) -> Path:

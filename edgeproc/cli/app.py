@@ -380,13 +380,14 @@ def _materialize_active(store: CacheStore, out: Path) -> None:
     """Reassemble every file in the active manifest into ``out/`` (fail-closed)."""
     from edgeproc.bundles.manifest import IndexManifest  # noqa: PLC0415
 
-    pointer = store.read_active()
-    if pointer is None:  # pragma: no cover
-        # Guards a future bug: sync_index always promotes an active pointer before we
-        # materialize, so a None here means that invariant broke — fail closed, never None-deref.
-        _fail("no active pointer to materialize")
-    manifest = IndexManifest.model_validate_json(store.get_manifest(pointer.manifest_hash))
-    _materialize_files(store, manifest, out)
+    with store.mutation():
+        pointer = store.read_active()
+        if pointer is None:  # pragma: no cover
+            # Guards a future bug: sync_index always promotes an active pointer before we
+            # materialize, so a None here means that invariant broke — fail closed.
+            _fail("no active pointer to materialize")
+        manifest = IndexManifest.model_validate_json(store.get_manifest(pointer.manifest_hash))
+        _materialize_files(store, manifest, out)
 
 
 def _materialize_files(store: CacheStore, manifest: IndexManifest, out: Path) -> None:
