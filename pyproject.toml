@@ -37,6 +37,7 @@ bundles = [
     "httpx>=0.27",
     "structlog>=26.1.0",
     "cryptography>=44",
+    "filelock>=3.20",
     "zstandard>=0.25",
     "packaging>=24",  # PEP 440 version comparison for anti-rollback (sync monotonicity)
 ]

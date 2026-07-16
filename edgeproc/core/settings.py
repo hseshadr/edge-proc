@@ -55,6 +55,9 @@ class EdgeProcSettings(BaseSettings):
     # enough never to reject a legit bundle; a single sync over 4 GiB or 100k files is refused.
     max_sync_total_bytes: int = 4 * 1024 * 1024 * 1024
     max_sync_files: int = 100_000
+    # Cross-process filesystem mutation lock. A wedged peer fails retryably instead of
+    # making sync/promote/GC wait forever.
+    mutation_lock_timeout: float = 30.0
     # Per-task resource budgets; the source of truth for the Task model's defaults.
     task_budget_ms: int = 5000
     task_budget_memory_mb: int = 256

@@ -15,6 +15,7 @@ delegates to, so the wave-5/6 integration tests ride the same producer.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -88,6 +89,27 @@ def test_republish_unchanged_catalog_touches_zero_chunk_files(tmp_path: Path) ->
 
     # Same inode for every chunk → not rewritten (hardlink reused, not replaced).
     assert pre == post
+
+
+def test_publish_crash_keeps_previous_latest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    private, _public = generate_keypair()
+    origin = tmp_path / "origin"
+    signer = Ed25519Signer(private)
+    _publish(origin, signer, _FILES, "1.0.0")
+    previous = (origin / "latest").read_bytes()
+    real_replace = os.replace
+
+    def crash_before_latest(src: object, dst: object) -> None:
+        if Path(dst).name == "latest":
+            raise OSError("simulated publisher crash")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", crash_before_latest)
+    with pytest.raises(OSError, match="publisher crash"):
+        _publish(origin, signer, {**_FILES, "new.bin": b"new"}, "1.0.1")
+    assert (origin / "latest").read_bytes() == previous
 
 
 def test_build_bundle_is_deterministic(tmp_path: Path) -> None:

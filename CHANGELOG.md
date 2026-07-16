@@ -4,6 +4,28 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
 
 ## [Unreleased]
 
+### Added
+- **Canonical, portable integrity failures.** Bundle-integrity exceptions now
+  carry the shared `bundle.integrity_failed` code and can be rendered as RFC
+  9457 Problem Details without changing their existing Python type or message.
+- **Evidence-backed operating contract and benchmark.** A single operations guide now
+  defines threat/privacy boundaries, recovery ownership, fixed resource limits, and a
+  repeatable offline p50/p95/RSS gate for vector search and signed bundle sync.
+
+### Changed
+- **The shared error dependency now resolves from its released v0.2.0 tag.**
+  Fresh clones and CI consume the same immutable public release instead of the
+  temporary pre-release commit pin.
+- **Filesystem mutations are cross-process serialized and bounded.** Publish, sync,
+  rollback-check/promote, GC, and CLI materialization share one mutation lock, closing
+  stale-last-writer and sync-vs-GC races. Lock waits fail retryably after 30 seconds.
+- **Task budgets are documented truthfully.** The v0 fields are runtime declarations,
+  not facade-level preemption or whole-process memory enforcement.
+- **Workflow actions are immutable.** CI, gitleaks, and scheduled dependency-audit
+  actions are pinned to full commit SHAs, with a regression test that rejects moving tags.
+- **Security lock refresh.** `setuptools` is locked at 83.0.0, clearing
+  PYSEC-2026-3447 reported by the exact-branch dependency audit.
+
 ## [0.1.4] — 2026-07-13
 
 - **`__version__` re-synced to the released version and single-sourced.**
