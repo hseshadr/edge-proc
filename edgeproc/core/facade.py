@@ -53,6 +53,8 @@ class EdgeProc:
     async def _run_with_memory(self, task: Task, runtime: Runtime | None) -> ResultEnvelope:
         if runtime is None:
             return self._no_runtime_envelope(task)
+        if task.budget_memory_mb <= 0:
+            return self._invalid_memory_budget_envelope(task, runtime)
         try:
             with self._memory_manager.reserve(task.budget_memory_mb * BYTES_PER_MEGABYTE):
                 return await self._dispatch(task, runtime)
@@ -98,4 +100,22 @@ class EdgeProc:
                 signature_status=DEFAULT_SIGNATURE_STATUS, runtime_version=__version__
             ),
             error="memory_budget_exceeded",
+        )
+
+    @staticmethod
+    def _invalid_memory_budget_envelope(task: Task, runtime: Runtime) -> ResultEnvelope:
+        """Encode a forged/unvalidated non-positive task budget as data."""
+        return ResultEnvelope(
+            request_id=task.request_id,
+            task_kind=task.kind,
+            success=False,
+            payload={},
+            runtime_used=runtime.name,
+            privacy_mode=task.privacy_mode,
+            confidence=0.0,
+            latency_ms=0.0,
+            provenance=Provenance(
+                signature_status=DEFAULT_SIGNATURE_STATUS, runtime_version=__version__
+            ),
+            error="invalid_memory_budget",
         )

@@ -13,6 +13,10 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
   repeatable offline p50/p95/RSS gate for vector search and signed bundle sync.
 
 ### Changed
+- **Task memory budgets fail closed at the typed boundary.** Non-positive
+  `budget_memory_mb` values are rejected by `Task`; forged/unvalidated task
+  instances receive an `invalid_memory_budget` failure envelope instead of
+  leaking a raw `ValueError` from admission control.
 - **The shared error dependency now resolves from its released v0.2.0 tag.**
   Fresh clones and CI consume the same immutable public release instead of the
   temporary pre-release commit pin.

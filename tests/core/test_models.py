@@ -61,6 +61,28 @@ def test_explicit_per_task_budget_overrides_the_settings_default(
     assert task.budget_memory_mb == 22
 
 
+@pytest.mark.parametrize("budget_memory_mb", [0, -1])
+def test_task_rejects_non_positive_memory_budget_at_typed_boundary(
+    budget_memory_mb: int,
+) -> None:
+    with pytest.raises(ValidationError, match="greater than 0"):
+        Task(
+            kind=TaskKind.SEARCH,
+            payload={},
+            privacy_mode=PrivacyMode.LOCAL_ONLY,
+            budget_memory_mb=budget_memory_mb,
+        )
+
+
+def test_task_rejects_non_positive_memory_budget_from_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EDGEPROC_TASK_BUDGET_MEMORY_MB", "0")
+
+    with pytest.raises(ValidationError, match="greater than 0"):
+        Task(kind=TaskKind.SEARCH, payload={}, privacy_mode=PrivacyMode.LOCAL_ONLY)
+
+
 def test_task_capability_token_defaults_to_empty_v0_passthrough() -> None:
     task = Task(kind=TaskKind.EMBED, payload={}, privacy_mode=PrivacyMode.LOCAL_ONLY)
     assert task.capability_token == ""

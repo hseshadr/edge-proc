@@ -90,7 +90,9 @@ class Task(BaseModel):
     capability_token: str = ""
     # Defaults flow from EdgeProcSettings (one source of truth); an explicit value still wins.
     budget_ms: int = Field(default_factory=_default_budget_ms)
-    budget_memory_mb: int = Field(default_factory=_default_budget_memory_mb)
+    budget_memory_mb: int = Field(
+        default_factory=_default_budget_memory_mb, gt=0, validate_default=True
+    )
     path_signature: str | None = None
 
 

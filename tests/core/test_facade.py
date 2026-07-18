@@ -111,6 +111,20 @@ async def test_refuses_task_when_declared_memory_exceeds_capacity() -> None:
     assert ep.memory_manager.reserved_bytes == 0
 
 
+async def test_returns_typed_failure_for_an_unvalidated_non_positive_memory_budget() -> None:
+    sink = BufferedSink()
+    runtime = _Runtime("vec", CapabilityVerdict.ACCEPT)
+    ep = _edgeproc(runtime, sink=sink)
+    task = _task().model_copy(update={"budget_memory_mb": 0})
+
+    result = await ep.run(task)
+
+    assert result.success is False
+    assert result.error == "invalid_memory_budget"
+    assert runtime.calls == 0
+    assert ep.memory_manager.reserved_bytes == 0
+
+
 async def test_local_default_builds_a_usable_instance() -> None:
     ep = EdgeProc.local_default()
     # No runtimes are guaranteed installed in v0-core, so a bare task fails closed.
