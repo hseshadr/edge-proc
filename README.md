@@ -22,7 +22,7 @@ index files over the internet and check, with cryptography, that nobody tampered
 along the way. Think of it like an app store that verifies the signature on an update
 before installing it — except for your search index.
 
-## Northstar status (verified 2026-07-16)
+## Status (verified 2026-07-16)
 
 **EdgeProc now has an explicit memory-admission boundary for concurrent work.**
 `MemoryManager` reserves each task's declared memory budget before dispatch, rejects
