@@ -57,7 +57,7 @@ async def _search_samples() -> list[float]:
     rng = np.random.default_rng(20260715)
     rows = rng.standard_normal((VECTOR_COUNT, VECTOR_DIM)).astype(np.float32)
     rows /= np.linalg.norm(rows, axis=1, keepdims=True)
-    index = FaissVectorIndex("northstar", IndexConfig(dimension=VECTOR_DIM))
+    index = FaissVectorIndex("benchmark", IndexConfig(dimension=VECTOR_DIM))
     await index.insert(_embeddings(rows))
     query = rows[0].tolist()
     for _ in range(3):
@@ -87,7 +87,7 @@ def _origin(root: Path) -> tuple[Path, Ed25519Verifier]:
         store=FilesystemCacheStore(origin),
         chunker=GearCDC(),
         signer=Ed25519Signer(private),
-        bundle_id="northstar",
+        bundle_id="benchmark",
         version="1.0.0",
         channel="stable",
         sequence=1,
@@ -103,7 +103,7 @@ def _sync_once(origin: Path, cache: Path, verifier: Ed25519Verifier) -> float:
         store=FilesystemCacheStore(cache),
         adapter=FilesystemAdapter(),
         verifier=verifier,
-        expected_bundle_id="northstar",
+        expected_bundle_id="benchmark",
         expected_channel="stable",
     )
     return _milliseconds(start)
@@ -148,7 +148,7 @@ async def _run(root: Path) -> dict[str, object]:
 
 
 def main() -> None:
-    with TemporaryDirectory(prefix="edgeproc-northstar-") as directory:
+    with TemporaryDirectory(prefix="edgeproc-benchmark-") as directory:
         result = asyncio.run(_run(Path(directory)))
     print(json.dumps(result, indent=2, sort_keys=True))
     if not result["passed"]:

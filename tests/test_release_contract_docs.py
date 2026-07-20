@@ -36,8 +36,8 @@ def test_budget_copy_distinguishes_admission_from_native_rss_enforcement() -> No
 
 def test_operations_contract_links_a_repeatable_benchmark() -> None:
     operations = _read("docs/OPERATIONS.md")
-    assert "benchmarks/northstar.py" in operations
-    assert (ROOT / "benchmarks/northstar.py").is_file()
+    assert "benchmarks/benchmark.py" in operations
+    assert (ROOT / "benchmarks/benchmark.py").is_file()
 
 
 def test_settings_copy_matches_host_environment_behavior() -> None:
