@@ -84,7 +84,7 @@ allocations. Share one manager across facades that share a process boundary.
 Run the fixed, offline benchmark:
 
 ```bash
-uv run python benchmarks/northstar.py
+uv run python benchmarks/benchmark.py
 ```
 
 The fixture and budgets are set before measurement: 10,000 normalized 32-dimensional
@@ -105,6 +105,6 @@ exact tree and machine, not a promise for every consumer.
 ## Release evidence
 
 A release is eligible only when `uv run poe gate`, `sh examples/run_loop.sh`,
-`uv run python benchmarks/northstar.py`, full-history secret scanning, dependency audit,
+`uv run python benchmarks/benchmark.py`, full-history secret scanning, dependency audit,
 and CI all pass on the exact commit. Record the immutable commit/tag and benchmark JSON;
 do not infer production truth from a different local tree.

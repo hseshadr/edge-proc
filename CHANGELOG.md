@@ -4,6 +4,8 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
 
 ## [Unreleased]
 
+## [0.1.5] — 2026-07-20
+
 ### Added
 - **Canonical, portable integrity failures.** Bundle-integrity exceptions now
   carry the shared `bundle.integrity_failed` code and can be rendered as RFC

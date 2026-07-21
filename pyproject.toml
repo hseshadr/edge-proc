@@ -81,6 +81,19 @@ path = "edgeproc/_version.py"
 [tool.hatch.build.targets.wheel]
 packages = ["edgeproc"]
 
+[tool.hatch.build.targets.sdist]
+# Ship only the Python-distribution sources. Keeps the sdist lean: the default
+# hatchling sdist otherwise vacuums in uv.lock, docs/ SVG diagrams, the GitHub
+# social-preview PNG, and repo-governance files that no installer needs.
+only-include = [
+  "edgeproc",
+  "tests",
+  "examples",
+  "README.md",
+  "CHANGELOG.md",
+  "LICENSE",
+]
+
 [tool.ruff]
 target-version = "py313"
 line-length = 100
