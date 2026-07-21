@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 from edgeproc_core.vector_mgmt.core.types import IndexConfig, VectorEmbedding
-from typer.testing import CliRunner
+from typer.testing import CliRunner, Result
 
 from edgeproc import __version__
 from edgeproc.cli import app
@@ -157,6 +157,71 @@ def test_sync_malformed_trust_key_fails_closed(tmp_path: Path) -> None:
     assert "malformed trust-root key" in result.stderr
     # A present-but-corrupt key is a DIFFERENT canonical code than an absent one.
     assert "[config.invalid]" in result.stderr
+
+
+def _sync_with_key(tmp_path: Path, key: Path) -> Result:
+    """Invoke `sync` against an empty origin with ``key`` as the pinned trust root."""
+    return runner.invoke(
+        app,
+        [
+            "sync",
+            "--base-url",
+            str(tmp_path / "origin"),
+            "--cache-dir",
+            str(tmp_path / "cache"),
+            "--key",
+            str(key),
+        ],
+    )
+
+
+def test_refusal_renders_rfc9457_problem_details_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`EDGEPROC_ERROR_FORMAT=json` makes a fail-closed refusal machine-readable.
+
+    A provenance substrate that refuses must say WHY in a form a caller can branch on,
+    not only in prose. The payload is a real RFC 9457 object built from the canonical
+    catalog: `type` is the code, `title` is the catalog's English for it with the
+    offending field interpolated, `detail` is the operator message verbatim.
+    """
+    monkeypatch.setenv("EDGEPROC_ERROR_FORMAT", "json")
+
+    result = _sync_with_key(tmp_path, tmp_path / "absent.key")
+
+    assert result.exit_code == 1
+    problem = json.loads(result.stderr.strip())
+    assert problem["type"] == "config.missing"
+    assert problem["title"] == "A required setting is missing: --key."
+    assert "{field}" not in problem["title"]  # the catalog placeholder really was filled
+    assert "could not read trust-root key" in problem["detail"]
+    assert str(tmp_path / "absent.key") in problem["detail"]
+
+
+def test_problem_details_json_distinguishes_malformed_from_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The structured payload carries the same code split the text line does."""
+    monkeypatch.setenv("EDGEPROC_ERROR_FORMAT", "json")
+    bad = tmp_path / "public.key"
+    bad.write_bytes(b"short")  # present, but not a 32-byte raw ed25519 public key
+
+    problem = json.loads(_sync_with_key(tmp_path, bad).stderr.strip())
+
+    assert problem["type"] == "config.invalid"
+    assert problem["title"] == "A setting is invalid: --key."
+    assert "malformed trust-root key" in problem["detail"]
+
+
+def test_text_refusal_stays_the_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No env var (or any value but ``json``) keeps the one-line operator rendering."""
+    monkeypatch.delenv("EDGEPROC_ERROR_FORMAT", raising=False)
+
+    stderr = _sync_with_key(tmp_path, tmp_path / "absent.key").stderr
+
+    assert stderr.lstrip().startswith("[config.missing] ")
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(stderr.strip())
 
 
 def _save_catalog_index(directory: Path) -> None:

@@ -27,7 +27,7 @@ def _read(relative: str) -> str:
         "## Measured performance contract",
     ],
 )
-def test_operations_contract_exposes_distinguished_engineer_gates(heading: str) -> None:
+def test_operations_contract_documents_every_required_section(heading: str) -> None:
     assert heading in _read("docs/OPERATIONS.md")
 
 
@@ -51,6 +51,57 @@ def test_settings_copy_matches_host_environment_behavior() -> None:
     readme = _read("README.md")
     assert "rejects unknown fields" not in readme
     assert "ignores unrelated host variables" in readme
+
+
+@pytest.mark.parametrize("doc", ["README.md", "docs/QUICKSTART.md"])
+def test_docs_show_the_canonical_code_prefix_on_every_documented_refusal(doc: str) -> None:
+    """Documented failure transcripts must match what the CLI really prints.
+
+    The bug this exists to prevent: both transcripts showed a bare message while the CLI
+    has always prefixed the canonical code, so a reader comparing their own terminal
+    against the docs saw a mismatch on the fail-closed path this project most wants
+    trusted. Asserting the bare form is ABSENT is the half that actually catches a
+    regression — a correct line trivially contains the bare one as a substring.
+    """
+    text = _read(doc)
+    for code, message in (
+        ("config.missing", "no trust root: pass --key"),
+        ("bundle.integrity_failed", "sync failed: stored chunk failed to decompress"),
+    ):
+        assert f"[{code}] {message}" in text
+        assert not re.search(rf"^[#\s]*{re.escape(message)}", text, re.MULTILINE)
+
+
+def _documented_settings() -> set[str]:
+    """Setting names in the README configuration table's first column."""
+    rows = re.findall(r"^\|\s*`(\w+)`\s*\|\s*`([A-Z_]+)`\s*\|", _read("README.md"), re.MULTILINE)
+    return {name for name, _env in rows}
+
+
+def test_readme_documents_every_setting() -> None:
+    """Drift lock: the config table must cover the WHOLE settings object, not a subset.
+
+    The bug this exists to prevent: the table documented 11 of 15 fields, so the four
+    fail-closed sync ceilings (`max_decompressed_bytes`, `max_fetch_bytes`,
+    `max_sync_total_bytes`, `max_sync_files`) were tunable but undiscoverable — a reader
+    could only find them by reading the source. Adding a field now fails this test until
+    it is documented.
+    """
+    from edgeproc.core.settings import EdgeProcSettings  # noqa: PLC0415
+
+    assert _documented_settings() == set(EdgeProcSettings.model_fields)
+
+
+def test_readme_documents_each_setting_with_its_real_env_var() -> None:
+    """A documented env var that the settings object does not bind is worse than absent."""
+    from edgeproc.core.settings import EdgeProcSettings  # noqa: PLC0415
+
+    expected = {
+        name: str(field.validation_alias or f"EDGEPROC_{name.upper()}")
+        for name, field in EdgeProcSettings.model_fields.items()
+    }
+    rows = re.findall(r"^\|\s*`(\w+)`\s*\|\s*`([A-Z_]+)`\s*\|", _read("README.md"), re.MULTILINE)
+    assert dict(rows) == expected
 
 
 # --- performance-claim drift guard ----------------------------------------------------

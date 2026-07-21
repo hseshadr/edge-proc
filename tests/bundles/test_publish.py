@@ -19,7 +19,7 @@ import os
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
+from typer.testing import CliRunner, Result
 
 from edgeproc.bundles.cas import FilesystemCacheStore
 from edgeproc.bundles.chunking import GearCDC
@@ -84,6 +84,7 @@ def test_republish_unchanged_catalog_touches_zero_chunk_files(tmp_path: Path) ->
 
     chunk_dir = origin / "chunk"
     pre = {p.name: p.stat().st_ino for p in chunk_dir.iterdir()}
+    assert pre  # non-vacuous: two empty dirs would satisfy `pre == post` and prove nothing
     _publish(origin, Ed25519Signer(private), _FILES, "1.0.1")
     post = {p.name: p.stat().st_ino for p in chunk_dir.iterdir()}
 
@@ -259,6 +260,61 @@ def test_cli_publish_malformed_key_fails_closed(tmp_path: Path) -> None:
     assert result.exit_code == 1
     assert "Traceback" not in result.stderr
     assert "malformed signing key" in result.stderr  # malformed-key branch
+
+
+def _publish_src(tmp_path: Path, src: Path) -> Result:
+    """Invoke `publish` with a valid signing key so ``src`` is the only thing under test."""
+    keys = tmp_path / "keys"
+    assert runner.invoke(app, ["keygen", "--out", str(keys)]).exit_code == 0
+    return runner.invoke(
+        app,
+        [
+            "publish",
+            "--src",
+            str(src),
+            "--origin-dir",
+            str(tmp_path / "origin"),
+            "--key",
+            str(keys / "private.key"),
+            "--bundle-id",
+            "b",
+            "--version",
+            "1.0.0",
+        ],
+    )
+
+
+def test_cli_publish_refuses_a_src_that_is_not_a_directory(tmp_path: Path) -> None:
+    """Publishing a FILE (or a nonexistent path) as --src fails closed, not with a traceback.
+
+    Surfaced by branch coverage: the guard's refusing edge had never been driven, so
+    nothing proved this operator mistake produces a clean message instead of a crash.
+    """
+    a_file = tmp_path / "not-a-dir"
+    a_file.write_bytes(b"x")
+
+    result = _publish_src(tmp_path, a_file)
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.stderr
+    assert "src is not a directory" in result.stderr
+
+
+def test_cli_publish_refuses_an_empty_src_directory(tmp_path: Path) -> None:
+    """An empty --src must refuse rather than sign and publish a contentless bundle.
+
+    Publishing "nothing" would mint a validly-signed pointer whose manifest lists no
+    files — a consumer would sync it and silently replace real content with an empty set.
+    """
+    empty = tmp_path / "empty-src"
+    empty.mkdir()
+
+    result = _publish_src(tmp_path, empty)
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.stderr
+    assert "no files to publish" in result.stderr
+    assert not (tmp_path / "origin").exists()  # nothing was minted
 
 
 def test_cli_publish_bind_identity_then_sync_with_matching_pin(tmp_path: Path) -> None:

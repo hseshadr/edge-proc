@@ -13,7 +13,7 @@ import importlib
 import json
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, NoReturn
+from typing import TYPE_CHECKING, Annotated, Final, NoReturn
 
 import typer
 from pydantic import ValidationError
@@ -22,7 +22,16 @@ from edgeproc._version import __version__
 from edgeproc.core.facade import EdgeProc
 from edgeproc.core.models import JsonValue, ResultEnvelope, Task
 from edgeproc.core.registry import RuntimeRegistry
-from edgeproc.errors import CONFIG_INVALID, CONFIG_MISSING, INTERNAL_UNKNOWN, ErrorCode, code_of
+from edgeproc.errors import (
+    CONFIG_INVALID,
+    CONFIG_MISSING,
+    INTERNAL_UNKNOWN,
+    ErrorCode,
+    Params,
+    ProblemDetails,
+    code_of,
+    problem_details_for,
+)
 
 if TYPE_CHECKING:
     from edgeproc.bundles.adapters import FetchAdapter
@@ -37,6 +46,13 @@ if TYPE_CHECKING:
     from edgeproc.bundles.sync import SyncResult
     from edgeproc.core.protocols import Runtime
     from edgeproc.localvec.encoder import Encoder
+
+#: Opt in to machine-readable refusals: ``EDGEPROC_ERROR_FORMAT=json`` makes every
+#: fail-closed exit print one RFC 9457 Problem Details object on stderr instead of a
+#: text line, so a CI step or supervising process can branch on ``type`` rather than
+#: pattern-matching prose. Any other value (or unset) keeps the human rendering.
+_ERROR_FORMAT_ENV: Final = "EDGEPROC_ERROR_FORMAT"
+_JSON_FORMAT: Final = "json"
 
 app = typer.Typer(help="EdgeProc — AI-native local execution substrate.", no_args_is_help=True)
 
@@ -287,7 +303,7 @@ def _load_task(path: Path) -> Task:
     try:
         return Task.model_validate_json(path.read_text())
     except (OSError, ValidationError) as exc:
-        _fail(f"could not load task from {path}: {exc}", CONFIG_INVALID)
+        _fail(f"could not load task from {path}: {exc}", CONFIG_INVALID, field="--task")
 
 
 def _route_runtime(index_dir: Path, model: str | None, index_name: str) -> Runtime:
@@ -353,6 +369,7 @@ def _resolve_trust_key(key: Path | None) -> Path:
         _fail(
             "no trust root: pass --key or set EDGEPROC_TRUST_ROOT_PUBKEY_PATH (refusing to sync)",
             CONFIG_MISSING,
+            field="EDGEPROC_TRUST_ROOT_PUBKEY_PATH",
         )
     return resolved
 
@@ -369,11 +386,11 @@ def _load_verifier(key: Path | None, verifier_cls: type[Ed25519Verifier]) -> Ver
     try:
         raw = path.read_bytes()
     except OSError as exc:
-        _fail(f"could not read trust-root key {path}: {exc}", CONFIG_MISSING)
+        _fail(f"could not read trust-root key {path}: {exc}", CONFIG_MISSING, field="--key")
     try:
         return verifier_cls.from_public_bytes(raw)
     except ValueError as exc:
-        _fail(f"malformed trust-root key {path}: {exc}", CONFIG_INVALID)
+        _fail(f"malformed trust-root key {path}: {exc}", CONFIG_INVALID, field="--key")
 
 
 def _run_sync(
@@ -460,11 +477,11 @@ def _load_signer(key: Path, signer_cls: type[Ed25519Signer]) -> Signer:
     try:
         raw = key.read_bytes()
     except OSError as exc:
-        _fail(f"could not read signing key {key}: {exc}", CONFIG_MISSING)
+        _fail(f"could not read signing key {key}: {exc}", CONFIG_MISSING, field="--key")
     try:
         return signer_cls.from_private_bytes(raw)
     except ValueError as exc:
-        _fail(f"malformed signing key {key}: {exc}", CONFIG_INVALID)
+        _fail(f"malformed signing key {key}: {exc}", CONFIG_INVALID, field="--key")
 
 
 def _read_src(src: Path) -> dict[str, bytes]:
@@ -485,14 +502,47 @@ def _render_pointer(pointer: VersionPointer, *, pretty: bool) -> str:
     return pointer.model_dump_json(indent=2)
 
 
-def _fail(message: str, code: ErrorCode = INTERNAL_UNKNOWN) -> NoReturn:
-    """Exit 1 with an operator-facing message stamped with its canonical error code.
+class _Refusal(Exception):  # noqa: N818 - a refusal, not an "Error"; never escapes the CLI
+    """A fail-closed CLI refusal, carrying the canonical code it renders as.
+
+    ``problem_details_for`` resolves a code off an exception's ``code`` attribute, so
+    the CLI's own refusals become first-class members of the same catalog the library's
+    raised errors belong to, rendered by exactly one code path.
+    """
+
+    def __init__(self, message: str, code: ErrorCode) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def _render_refusal(problem: ProblemDetails) -> str:
+    """RFC 9457 JSON when ``EDGEPROC_ERROR_FORMAT=json``, else one operator-readable line.
+
+    Read straight from the environment rather than through ``EdgeProcSettings``: this is
+    the failure path, and constructing settings here would let an unrelated malformed env
+    var raise *while reporting another error*, swallowing the refusal being reported.
+    """
+    if os.environ.get(_ERROR_FORMAT_ENV, "").strip().lower() == _JSON_FORMAT:
+        return json.dumps(problem.to_dict(), sort_keys=True)
+    return f"[{problem.type}] {problem.detail}"
+
+
+def _fail(
+    message: str, code: ErrorCode = INTERNAL_UNKNOWN, *, field: str | None = None
+) -> NoReturn:
+    """Exit 1 with the refusal rendered as RFC 9457 Problem Details.
 
     The code prefix is what makes the catalog in :mod:`edgeproc.errors` real at the
     surface an operator actually reads: ``[config.missing] no trust root: ...`` is
-    greppable and maps onto the same RFC 9457 ``type`` a library consumer would render.
+    greppable and IS the same RFC 9457 ``type`` a library consumer renders — the two
+    views are built from one ``ProblemDetails``, so they can never drift.
+
+    ``field`` names the offending input (``--key``, an env var) and fills the
+    ``config.*`` catalog entries' ``{field}`` slot, so the structured ``title`` reads
+    "A required setting is missing: --key." rather than leaking a raw placeholder.
     """
-    typer.echo(f"[{code}] {message}", err=True)
+    params: Params = {"field": field} if field is not None else {}
+    typer.echo(_render_refusal(problem_details_for(_Refusal(message, code), params)), err=True)
     raise typer.Exit(code=1)
 
 

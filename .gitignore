@@ -29,3 +29,7 @@ requirements-audit.txt
 
 # Serena MCP tool scratch
 .serena/
+
+# `examples/quickstart.py` defaults its --out here, so running the example
+# regenerates this FAISS index. Build output, never a source artifact.
+examples/catalog_idx/

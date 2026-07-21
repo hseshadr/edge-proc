@@ -66,12 +66,19 @@ Issues = "https://github.com/hseshadr/edge-proc/issues"
 # Open-source onboarding: clone ONLY this repo and `uv sync` — edgeproc-core
 # is pulled from public GitHub (it is not on PyPI).
 #
-# Pinned by full commit SHA, not by tag. A git TAG is mutable: whoever can push to
-# that repo can retarget `v0.2.0` at different code, and every clone would silently
-# resolve a dependency nobody reviewed. The SHA below is immutable and is the commit
-# `v0.2.0` pointed at when it was pinned (`git ls-remote ... refs/tags/v0.2.0^{}`) —
-# the release that ships the canonical-errors module (edgeproc_core.errors).
-# Re-resolve and update this line deliberately when moving to a new release.
+# Pinned by full commit SHA to an UNTAGGED commit on that repo's `main`. It is not a
+# release: `git describe` calls it v0.2.0-18-g6cdf847 — 18 commits past v0.2.0 — and no
+# tag contains it.
+#
+# Why an untagged commit is nevertheless the right pin today: edge-proc imports
+# `edgeproc_core`, and no released tag carries that import package yet. The newest tag,
+# v0.2.0, still ships the pre-rename `shared_libs_python`, so pinning any tag would not
+# build. Pinning the SHA is also the stronger integrity choice regardless: a git TAG is
+# mutable — whoever can push to that repo can retarget `v0.2.0` at different code and
+# every clone would silently resolve a dependency nobody reviewed — whereas this SHA is
+# immutable, so `uv sync` is byte-for-byte reproducible for everyone.
+#
+# Re-pin to a real tag once upstream cuts a release containing the `edgeproc_core` rename.
 edgeproc-core = { git = "https://github.com/hseshadr/shared-libs-python.git", rev = "6cdf8475b223262821622a021c561aed9213a472" }
 
 # Co-developing edgeproc-core locally? Clone it next to this repo and swap the
@@ -133,6 +140,7 @@ asyncio_mode = "auto"
 addopts = [
     "--strict-markers",
     "--cov=edgeproc",
+    "--cov-branch",
     "--cov-report=term-missing",
     "--cov-fail-under=90",
     "-v",
@@ -141,6 +149,10 @@ addopts = [
 [tool.coverage.run]
 source = ["edgeproc"]
 omit = ["*/tests/*", "*/__pycache__/*"]
+# Statement coverage only proves a line RAN; branch coverage proves both outcomes of
+# each decision were taken. For a fail-closed substrate the untaken edge is exactly the
+# one that matters — the `if not verified: refuse` that never got exercised.
+branch = true
 
 [tool.coverage.report]
 exclude_lines = [

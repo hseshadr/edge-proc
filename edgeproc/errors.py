@@ -19,6 +19,7 @@ from dataclasses import replace
 
 from edgeproc_core.errors import (
     ErrorCode,
+    Params,
     ProblemDetails,
     Registry,
     define_errors,
@@ -36,6 +37,7 @@ __all__ = [
     "CONFIG_MISSING",
     "INTERNAL_UNKNOWN",
     "ErrorCode",
+    "Params",
     "ProblemDetails",
     "code_of",
     "problem_details_for",
@@ -65,10 +67,16 @@ def code_of(error: BaseException) -> ErrorCode:
     return INTERNAL_UNKNOWN
 
 
-def problem_details_for(error: BaseException) -> ProblemDetails:
+def problem_details_for(error: BaseException, params: Params | None = None) -> ProblemDetails:
     """Render an error as RFC 9457 Problem Details (canonical code + description).
 
     ``title`` is the catalog's English for the carried code; ``detail`` is the
     exception's own message, preserved verbatim so no operator-facing text is lost.
+
+    ``params`` fills the catalog entry's ``{placeholder}`` slots and rides along as
+    RFC 9457 extension members. ``config.missing``/``config.invalid`` declare a
+    ``field``, so passing ``{"field": "--key"}`` is what turns the generic
+    "A required setting is missing: {field}." into a sentence naming the real input.
     """
-    return replace(registry.to_problem_details(code_of(error)), detail=str(error))
+    problem = registry.to_problem_details(code_of(error), params)
+    return replace(problem, detail=str(error))

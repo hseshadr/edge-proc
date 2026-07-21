@@ -119,6 +119,43 @@ async def test_rebuild_compacts_tombstones() -> None:
     assert {doc for doc, _ in await idx.search([0.0, 1.0, 0.0, 0.0], k=5)} == {"b"}
 
 
+async def test_delete_ignores_ids_that_are_not_live() -> None:
+    """Deleting an unknown or already-deleted id is a no-op, never a KeyError.
+
+    Surfaced by branch coverage: the `if entity_id in self._live` guard had only ever
+    been driven down its TRUE edge, so nothing proved a caller can safely re-issue a
+    delete (a retried sync does exactly that).
+    """
+    idx = _index()
+    await idx.insert([_emb("a", [1.0, 0.0, 0.0, 0.0]), _emb("b", [0.0, 1.0, 0.0, 0.0])])
+    await idx.delete(["a"])
+
+    await idx.delete(["a", "never-inserted"])  # must not raise
+
+    stats = await idx.get_stats()
+    assert stats.vector_count == 1  # "b" only; the repeat delete changed nothing
+    assert stats.tombstone_count == 1  # and did not double-count "a"
+
+
+async def test_rebuild_of_a_fully_deleted_index_leaves_it_empty_and_searchable() -> None:
+    """Compacting when EVERY entry is tombstoned must not blow up on an empty survivor set.
+
+    Surfaced by branch coverage: `_reindex_survivors` only ever ran with a non-empty
+    survivor list, so `np.vstack([])` — which raises on an empty sequence — was one
+    fully-drained index away from firing in production.
+    """
+    idx = _index()
+    await idx.insert([_emb("a", [1.0, 0.0, 0.0, 0.0]), _emb("b", [0.0, 1.0, 0.0, 0.0])])
+    await idx.delete(["a", "b"])
+
+    await idx.rebuild()
+
+    stats = await idx.get_stats()
+    assert stats.vector_count == 0
+    assert stats.tombstone_count == 0
+    assert await idx.search([1.0, 0.0, 0.0, 0.0], k=5) == []  # empty, not a crash
+
+
 async def test_rebuild_with_config_keeps_dimension_but_updates_other_knobs() -> None:
     idx = _index()
     await idx.insert([_emb("a", [1.0, 0.0, 0.0, 0.0])])

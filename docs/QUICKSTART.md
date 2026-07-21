@@ -15,7 +15,7 @@ git clone https://github.com/hseshadr/edge-proc.git
 cd edge-proc
 
 uv sync --all-extras    # core + [localvec] + [bundles] + dev tooling
-uv run poe gate         # lint + format-check + mypy strict + Radon Grade A + pytest (≥90% cov)
+uv run poe gate         # lint + format-check + mypy strict + Radon Grade A + pytest (≥90% statement+branch cov)
 ```
 
 `poe gate` is the same set of checks CI runs. If it passes locally, CI passes.
@@ -149,7 +149,7 @@ printf 'corrupted' > "origin/chunk/$(ls origin/chunk | head -1)"
 
 uv run edgeproc sync \
     --base-url origin --cache-dir cache3 --key keys/public.key --pretty
-#   sync failed: stored chunk failed to decompress
+#   [bundle.integrity_failed] sync failed: stored chunk failed to decompress
 echo $?
 #   1
 
@@ -164,7 +164,7 @@ Sync also refuses to run at all without a pinned key:
 
 ```bash
 uv run edgeproc sync --base-url origin --cache-dir cache2 --pretty
-#   no trust root: pass --key or set EDGEPROC_TRUST_ROOT_PUBKEY_PATH (refusing to sync)
+#   [config.missing] no trust root: pass --key or set EDGEPROC_TRUST_ROOT_PUBKEY_PATH (refusing to sync)
 ```
 
 ## Next steps

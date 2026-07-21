@@ -8,14 +8,19 @@ WITHOUT changing the exception type or message any existing caller depends on.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+
+from typer.testing import CliRunner
 
 from edgeproc import errors
 from edgeproc.bundles.adapters import ResponseTooLargeError
 from edgeproc.bundles.cas import IntegrityError, RollbackError
 from edgeproc.bundles.signing import SignatureError
+from edgeproc.cli import app
 
 _INTEGRITY_EN = "A downloaded file failed its integrity check. Retry to re-fetch it."
+_runner = CliRunner()
 
 
 def test_registry_registers_every_edgeproc_code() -> None:
@@ -69,31 +74,55 @@ def test_unknown_error_falls_back_to_internal_unknown() -> None:
     assert problem.detail == "something else"
 
 
-def test_every_declared_code_is_attached_at_a_real_throw_site() -> None:
-    """Anti-vacuity: a code named "for greppable reuse at throw-sites" must have one.
+def _cli_refusal_code(tmp_path: Path, key: Path) -> str:
+    """Drive `sync` to a fail-closed refusal and return the code it actually rendered."""
+    result = _runner.invoke(
+        app,
+        [
+            "sync",
+            "--base-url",
+            str(tmp_path / "origin"),
+            "--cache-dir",
+            str(tmp_path / "cache"),
+            "--key",
+            str(key),
+        ],
+        env={"EDGEPROC_ERROR_FORMAT": "json"},
+    )
+    assert result.exit_code == 1
+    code: str = json.loads(result.stderr.strip())["type"]
+    return code
 
-    Regression: three of the five codes were declared but never attached to anything
-    raised, so the catalog advertised coverage the product did not have. Each code must
-    be referenced from shipped code OUTSIDE its own declaration in ``errors.py``.
+
+def test_every_declared_code_is_produced_by_a_real_failure(tmp_path: Path) -> None:
+    """Anti-vacuity: every declared code must be OBSERVABLE from a real failure path.
+
+    The earlier guard grepped edge-proc's sources for each constant's NAME, which a bare
+    ``from edgeproc.errors import ...`` line already satisfied — it proved a spelling,
+    not a behavior, and would have stayed green while a code was declared and never
+    rendered. This drives the paths instead and collects the codes they emit: the two
+    ``config.*`` codes come back off the CLI's real stderr payload, so a code nothing can
+    produce (or one whose wiring regresses) fails here.
     """
-    root = Path(__file__).resolve().parents[1] / "edgeproc"
-    sources = {
-        path: path.read_text(encoding="utf-8")
-        for path in root.rglob("*.py")
-        if path.name != "errors.py"
+    malformed = tmp_path / "public.key"
+    malformed.write_bytes(b"short")  # present, but not a 32-byte raw ed25519 public key
+
+    observed = {
+        errors.code_of(IntegrityError("chunk failed its content-address check")),
+        errors.code_of(SignatureError("manifest signature did not verify")),
+        errors.code_of(ResponseTooLargeError("body exceeded the fetch ceiling")),
+        errors.code_of(ValueError("a failure carrying no canonical code")),
+        _cli_refusal_code(tmp_path, tmp_path / "absent.key"),
+        _cli_refusal_code(tmp_path, malformed),
     }
-    unattached = [
-        name
-        for name in (
-            "BUNDLE_INTEGRITY_FAILED",
-            "BUNDLE_DOWNLOAD_FAILED",
-            "CONFIG_MISSING",
-            "CONFIG_INVALID",
-            "INTERNAL_UNKNOWN",
-        )
-        if not any(name in text for text in sources.values())
-    ]
-    assert unattached == [], f"declared but never used at a throw site: {unattached}"
+
+    assert observed == {
+        errors.BUNDLE_INTEGRITY_FAILED,
+        errors.BUNDLE_DOWNLOAD_FAILED,
+        errors.CONFIG_MISSING,
+        errors.CONFIG_INVALID,
+        errors.INTERNAL_UNKNOWN,
+    }
 
 
 def test_download_failure_carries_the_download_code() -> None:

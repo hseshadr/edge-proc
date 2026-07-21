@@ -209,9 +209,13 @@ uv run edgeproc sync --base-url origin --cache-dir cache2 --pretty; echo "exit=$
 ```
 
 ```text
-no trust root: pass --key or set EDGEPROC_TRUST_ROOT_PUBKEY_PATH (refusing to sync)
+[config.missing] no trust root: pass --key or set EDGEPROC_TRUST_ROOT_PUBKEY_PATH (refusing to sync)
 exit=1
 ```
+
+That `[config.missing]` prefix is a canonical error code, not decoration — every refusal
+carries one, and `EDGEPROC_ERROR_FORMAT=json` turns the same refusal into a machine-readable
+[RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) object so a script can branch on it.
 
 **Corrupt a chunk on the server and the device rejects the whole release.** Overwrite any file
 under `origin/chunk/` and sync into a fresh cache:
@@ -224,7 +228,7 @@ ls cache3
 ```
 
 ```text
-sync failed: stored chunk failed to decompress
+[bundle.integrity_failed] sync failed: stored chunk failed to decompress
 exit=1
 chunks
 manifests
@@ -304,10 +308,15 @@ cd edge-proc
 uv sync --all-extras   # core + extras + dev tooling
 ```
 
-That Just Works — `edgeproc-core` isn't on PyPI either, so `pyproject.toml` pins it to a
-release tag from public GitHub (see `[tool.uv.sources]`); `uv sync` fetches it for you, nothing
-else to clone. Co-developing `edgeproc-core` alongside EdgeProc? Clone it next to this repo
-and swap the git source for the commented path source in `pyproject.toml`.
+That Just Works — `edgeproc-core` isn't on PyPI either, so `pyproject.toml` pins it by full
+commit SHA to public GitHub (see `[tool.uv.sources]`); `uv sync` fetches it for you, nothing
+else to clone. That pin is **an untagged commit on the dependency's `main`, not a release**:
+edge-proc imports `edgeproc_core`, and no tag carries that import package yet — the newest
+tag still ships the pre-rename `shared_libs_python`, so pinning a tag would not build. A SHA
+is immutable either way, so every clone resolves the identical bytes. It gets re-pinned to a
+tag once upstream releases one containing the rename. Co-developing `edgeproc-core` alongside
+EdgeProc? Clone it next to this repo and swap the git source for the commented path source in
+`pyproject.toml`.
 
 Once edge-proc is published to PyPI, the extras install directly:
 
@@ -376,8 +385,31 @@ ecosystem-standard `HF_TOKEN`):
 | `task_budget_memory_mb` | `EDGEPROC_TASK_BUDGET_MEMORY_MB` | `256` | Default per-task memory budget. |
 | `max_in_flight_memory_mb` | `EDGEPROC_MAX_IN_FLIGHT_MEMORY_MB` | `512` | Sum of declared task reservations admitted concurrently by one `EdgeProc` instance. |
 | `max_materialize_bytes` | `EDGEPROC_MAX_MATERIALIZE_BYTES` | `256 MiB` | Maximum one file materialized into a returned `bytes` value. |
+| `max_decompressed_bytes` | `EDGEPROC_MAX_DECOMPRESSED_BYTES` | `64 MiB` | Ceiling on one chunk's decompressed plaintext — refuses a zstd bomb before it exhausts memory. A legitimate chunk is ≤256 KiB, so this never rejects real data. |
+| `max_fetch_bytes` | `EDGEPROC_MAX_FETCH_BYTES` | `256 MiB` | Ceiling on a single HTTP fetch body (pointer, manifest, or chunk) — bounds a hostile origin. |
+| `max_sync_total_bytes` | `EDGEPROC_MAX_SYNC_TOTAL_BYTES` | `4 GiB` | Aggregate bytes one `sync` will pull before refusing — disk-exhaustion defense against a runaway manifest. |
+| `max_sync_files` | `EDGEPROC_MAX_SYNC_FILES` | `100000` | Aggregate file count one `sync` will pull before refusing, for the same reason. |
 | `rrf_k_window` | `EDGEPROC_RRF_K_WINDOW` | `60` | RRF rank-window constant for hybrid fusion. |
 | `trust_root_pubkey_path` | `EDGEPROC_TRUST_ROOT_PUBKEY_PATH` | `None` | Pinned sync trust-root pubkey (no key ⇒ `sync` refused). |
+
+That is the complete set — all 15 fields of `EdgeProcSettings`. A test asserts this table
+matches the settings object field-for-field, so a new setting cannot ship undocumented.
+
+One more environment variable exists that is deliberately **not** an `EdgeProcSettings`
+field, because it steers CLI output rather than library behavior:
+
+| Env var | Default | Purpose |
+| --- | --- | --- |
+| `EDGEPROC_ERROR_FORMAT` | `text` | Set to `json` and every fail-closed exit prints one [RFC 9457 Problem Details](https://www.rfc-editor.org/rfc/rfc9457) object on stderr instead of a text line — so a CI step or supervising process branches on `type` rather than pattern-matching prose. |
+
+```console
+$ EDGEPROC_ERROR_FORMAT=json edgeproc sync --base-url ./origin --cache-dir ./cache --key absent.key
+{"detail": "could not read trust-root key absent.key: [Errno 2] No such file or directory: 'absent.key'", "field": "--key", "title": "A required setting is missing: --key.", "type": "config.missing"}
+```
+
+It is read straight from the environment rather than through `EdgeProcSettings` on purpose:
+this runs on the failure path, and building the settings object there would let an unrelated
+malformed variable raise *while reporting another error*, swallowing the refusal being reported.
 
 For the full picture — system context, bundle lifecycle, the verification chain, and the module
 map — see [**docs/ARCHITECTURE.md**](docs/ARCHITECTURE.md) (with d2 diagrams).
@@ -428,7 +460,7 @@ content-defined chunking), all behind opt-in extras.
 
 ```bash
 uv sync --all-extras   # core + extras + dev tooling
-uv run poe gate        # lint + format-check + mypy strict + Radon Grade A + pytest (≥90% cov)
+uv run poe gate        # lint + format-check + mypy strict + Radon Grade A + pytest (≥90% statement+branch cov)
 ```
 
 `poe gate` mirrors CI exactly — if it passes locally, CI passes.
