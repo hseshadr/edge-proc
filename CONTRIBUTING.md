@@ -24,9 +24,9 @@ EdgeProc uses [`uv`](https://docs.astral.sh/uv/) for environment and dependency 
 uv sync --all-extras
 ```
 
-`shared-libs-python` is **not on PyPI** — `pyproject.toml` pins it to a release tag from
+`edgeproc-core` is **not on PyPI** — `pyproject.toml` pins it to a release tag from
 public GitHub via `[tool.uv.sources]`, so `uv sync` fetches it for you with no sibling
-checkout. Co-developing `shared-libs-python` alongside EdgeProc? Clone it next to this repo
+checkout. Co-developing `edgeproc-core` alongside EdgeProc? Clone it next to this repo
 and swap the git source for the commented path source in `pyproject.toml`.
 
 ## Running the gate

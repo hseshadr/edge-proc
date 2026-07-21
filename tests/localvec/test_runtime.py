@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from shared_libs_python.vector_mgmt.core.types import IndexConfig, VectorEmbedding
+from edgeproc_core.vector_mgmt.core.types import IndexConfig, VectorEmbedding
 
 from edgeproc.core.models import (
     DEFAULT_SIGNATURE_STATUS,

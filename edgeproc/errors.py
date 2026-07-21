@@ -1,4 +1,4 @@
-"""edge-proc's canonical-error catalog, registered with ``shared_libs_python.errors``.
+"""edge-proc's canonical-error catalog, registered with ``edgeproc_core.errors``.
 
 edge-proc surfaces one prominent operator-facing failure — a trust-boundary
 integrity refusal from the CAS/bundle substrate — alongside the universal
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from shared_libs_python.errors import (
+from edgeproc_core.errors import (
     ErrorCode,
     ProblemDetails,
     Registry,
@@ -27,7 +27,7 @@ from shared_libs_python.errors import (
 
 # This module is edge-proc's seam over the shared catalog: callers import the code
 # constants AND the types they are annotated with from here, never reaching through to
-# ``shared_libs_python.errors`` themselves. Re-exporting the two types explicitly is what
+# ``edgeproc_core.errors`` themselves. Re-exporting the two types explicitly is what
 # makes that a supported import rather than an accident of implementation.
 __all__ = [
     "BUNDLE_DOWNLOAD_FAILED",

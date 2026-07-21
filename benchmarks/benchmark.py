@@ -14,7 +14,7 @@ from tempfile import TemporaryDirectory
 from time import perf_counter
 
 import numpy as np
-from shared_libs_python.vector_mgmt.core.types import IndexConfig, VectorEmbedding
+from edgeproc_core.vector_mgmt.core.types import IndexConfig, VectorEmbedding
 
 from edgeproc.bundles.adapters import FilesystemAdapter
 from edgeproc.bundles.cas import FilesystemCacheStore

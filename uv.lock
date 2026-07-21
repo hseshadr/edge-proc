@@ -393,9 +393,9 @@ nvtx = [
 name = "edge-proc"
 source = { editable = "." }
 dependencies = [
+    { name = "edgeproc-core" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
-    { name = "shared-libs-python" },
     { name = "typer" },
 ]
 
@@ -430,6 +430,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "cryptography", marker = "extra == 'bundles'", specifier = ">=44" },
+    { name = "edgeproc-core", git = "https://github.com/hseshadr/shared-libs-python.git?rev=6cdf8475b223262821622a021c561aed9213a472" },
     { name = "faiss-cpu", marker = "extra == 'localvec'", specifier = ">=1.14.3" },
     { name = "filelock", marker = "extra == 'bundles'", specifier = ">=3.20" },
     { name = "httpx", marker = "extra == 'bundles'", specifier = ">=0.27" },
@@ -439,7 +440,6 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.5" },
     { name = "rank-bm25", marker = "extra == 'localvec'", specifier = ">=0.2" },
     { name = "sentence-transformers", marker = "extra == 'localvec'", specifier = ">=5.6.0" },
-    { name = "shared-libs-python", git = "https://github.com/hseshadr/shared-libs-python.git?rev=ed1c3f6414710cb27d1c01e5fc2d6cadf0214b25" },
     { name = "structlog", marker = "extra == 'bundles'", specifier = ">=26.1.0" },
     { name = "typer", specifier = ">=0.26.8" },
     { name = "zstandard", marker = "extra == 'bundles'", specifier = ">=0.25" },
@@ -456,6 +456,14 @@ dev = [
     { name = "radon", specifier = ">=6.0" },
     { name = "ruff", specifier = ">=0.15.21" },
     { name = "xenon", specifier = ">=0.9" },
+]
+
+[[package]]
+name = "edgeproc-core"
+version = "0.2.0"
+source = { git = "https://github.com/hseshadr/shared-libs-python.git?rev=6cdf8475b223262821622a021c561aed9213a472#6cdf8475b223262821622a021c561aed9213a472" }
+dependencies = [
+    { name = "pydantic" },
 ]
 
 [[package]]
@@ -1540,14 +1548,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/34/26/f5d29e25ffdb535afef2d35cdb55b325298f96debd670da4c325e08d70f4/setuptools-83.0.0.tar.gz", hash = "sha256:025bccbbf0fa05b6192bc64ae1e7b16e001fd6d6d4d5de03c97b1c1ade523bef", size = 1154254, upload-time = "2026-07-04T15:31:22.699Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/5d/40/e1e72872c6354b306daef1703549e8e83b4d43cfea356311bf722a043752/setuptools-83.0.0-py3-none-any.whl", hash = "sha256:29b23c360f22f414dc7336bb39178cc7bcbf6021ed2733cde173f09dba19abb3", size = 1008090, upload-time = "2026-07-04T15:31:20.885Z" },
-]
-
-[[package]]
-name = "shared-libs-python"
-version = "0.2.0"
-source = { git = "https://github.com/hseshadr/shared-libs-python.git?rev=ed1c3f6414710cb27d1c01e5fc2d6cadf0214b25#ed1c3f6414710cb27d1c01e5fc2d6cadf0214b25" }
-dependencies = [
-    { name = "pydantic" },
 ]
 
 [[package]]

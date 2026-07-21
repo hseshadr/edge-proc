@@ -16,7 +16,7 @@ from __future__ import annotations
 from time import perf_counter
 from typing import Final, cast
 
-from shared_libs_python.vector_mgmt.core.types import IndexConfig, VectorEmbedding, VectorIndex
+from edgeproc_core.vector_mgmt.core.types import IndexConfig, VectorEmbedding, VectorIndex
 
 from edgeproc._version import __version__
 from edgeproc.core.models import (

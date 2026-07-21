@@ -3,13 +3,13 @@ index drops into shared-libs' IndexManager without an adapter in between."""
 
 from __future__ import annotations
 
-from shared_libs_python.vector_mgmt.core.index_manager import IndexManager
-from shared_libs_python.vector_mgmt.core.types import (
+from edgeproc_core.vector_mgmt.core.index_manager import IndexManager
+from edgeproc_core.vector_mgmt.core.types import (
     IndexConfig,
     VectorEmbedding,
     VectorIndex,
 )
-from shared_libs_python.vector_mgmt.partitioning.strategies import GlobalPartitionStrategy
+from edgeproc_core.vector_mgmt.partitioning.strategies import GlobalPartitionStrategy
 
 from edgeproc import EdgeProc, PrivacyMode, Task, TaskKind
 from edgeproc.core.registry import RuntimeRegistry

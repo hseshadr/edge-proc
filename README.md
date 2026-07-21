@@ -67,7 +67,7 @@ cat > save_index.py <<'PY'
 import asyncio
 from pathlib import Path
 
-from shared_libs_python.vector_mgmt.core.types import IndexConfig, VectorEmbedding
+from edgeproc_core.vector_mgmt.core.types import IndexConfig, VectorEmbedding
 
 from edgeproc.localvec.encoder import TextEncoder
 from edgeproc.localvec.faiss_index import FaissVectorIndex
@@ -304,9 +304,9 @@ cd edge-proc
 uv sync --all-extras   # core + extras + dev tooling
 ```
 
-That Just Works — `shared-libs-python` isn't on PyPI either, so `pyproject.toml` pins it to a
+That Just Works — `edgeproc-core` isn't on PyPI either, so `pyproject.toml` pins it to a
 release tag from public GitHub (see `[tool.uv.sources]`); `uv sync` fetches it for you, nothing
-else to clone. Co-developing `shared-libs-python` alongside EdgeProc? Clone it next to this repo
+else to clone. Co-developing `edgeproc-core` alongside EdgeProc? Clone it next to this repo
 and swap the git source for the commented path source in `pyproject.toml`.
 
 Once edge-proc is published to PyPI, the extras install directly:
@@ -320,7 +320,7 @@ pip install edge-proc[localvec,bundles]  # full local substrate
 
 EdgeProc is **purely a dependency** — a library an application embeds, not a service you sign
 up for. The core is tiny; the heavy machinery (FAISS, sync) is opt-in behind extras. It builds
-on [`shared-libs-python`](https://github.com/hseshadr/shared-libs-python): the FAISS index here
+on [`edgeproc-core`](https://github.com/hseshadr/shared-libs-python): the FAISS index here
 is a concrete implementation of that library's `VectorIndex` Protocol.
 
 ### The deterministic router
@@ -438,7 +438,7 @@ uv run poe gate        # lint + format-check + mypy strict + Radon Grade A + pyt
 **EdgeProc** — also written `edge-proc` and `edgeproc`; canonical repo
 [`hseshadr/edge-proc`](https://github.com/hseshadr/edge-proc) — is the open-source, local-first
 delivery-and-search substrate described above. It builds on
-[**shared-libs-python**](https://github.com/hseshadr/shared-libs-python), the vector-partitioning
+[**edgeproc-core**](https://github.com/hseshadr/shared-libs-python), the vector-partitioning
 protocol its FAISS runtime implements. Canonical entity page:
 [edge-reco.com/edgeproc](https://edge-reco.com/edgeproc), on a domain we control. It is **not
 affiliated with any other product or company named "EdgeProc"**.

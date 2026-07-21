@@ -49,7 +49,7 @@ from edgeproc.errors import BUNDLE_INTEGRITY_FAILED
 class IntegrityError(Exception):
     """A stored object failed its content-address / decompress check (fail-closed).
 
-    Carries the canonical ``bundle.integrity_failed`` code (``shared_libs_python.errors``)
+    Carries the canonical ``bundle.integrity_failed`` code (``edgeproc_core.errors``)
     so a consumer can render it to RFC 9457 via :func:`edgeproc.errors.problem_details_for`.
     The code is metadata only — the exception's type and message are unchanged, so every
     existing ``except IntegrityError`` handler behaves exactly as before.

@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 
 import pytest
-from shared_libs_python.vector_mgmt.core.types import IndexConfig, VectorEmbedding
+from edgeproc_core.vector_mgmt.core.types import IndexConfig, VectorEmbedding
 from typer.testing import CliRunner
 
 from edgeproc import __version__

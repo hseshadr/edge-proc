@@ -2,7 +2,7 @@
 
 edge-proc's most prominent operator-facing failure — a CAS/bundle integrity
 refusal (:class:`IntegrityError`) at the trust boundary — now carries a canonical
-code from ``shared_libs_python.errors`` and renders to RFC 9457 Problem Details,
+code from ``edgeproc_core.errors`` and renders to RFC 9457 Problem Details,
 WITHOUT changing the exception type or message any existing caller depends on.
 """
 

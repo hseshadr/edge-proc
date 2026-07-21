@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from shared_libs_python.vector_mgmt.core.types import IndexConfig, VectorEmbedding
+from edgeproc_core.vector_mgmt.core.types import IndexConfig, VectorEmbedding
 
 from edgeproc.core.models import PrivacyMode, Task, TaskKind
 from edgeproc.localvec.faiss_index import FaissVectorIndex

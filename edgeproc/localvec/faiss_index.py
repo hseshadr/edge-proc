@@ -1,6 +1,6 @@
 """FAISS-backed vector index that implements shared-libs' ``VectorIndex`` Protocol.
 
-Bridges a synchronous, build-once FAISS index into ``shared_libs_python.vector_mgmt``'s
+Bridges a synchronous, build-once FAISS index into ``edgeproc_core.vector_mgmt``'s
 async, lifecycle-managed contract:
 
 - CPU-bound FAISS calls run in ``asyncio.to_thread`` so the event loop never blocks.
@@ -20,15 +20,15 @@ from typing import Final
 
 import faiss
 import numpy as np
-from numpy.typing import NDArray
-from pydantic import BaseModel
-from shared_libs_python.vector_mgmt.core.types import (
+from edgeproc_core.vector_mgmt.core.types import (
     IndexConfig,
     IndexStats,
     Metadata,
     Scalar,
     VectorEmbedding,
 )
+from numpy.typing import NDArray
+from pydantic import BaseModel
 
 # FROZEN on-disk contract: a saved index dir is addressed by these exact filenames, so
 # load() can find a save()d index across versions. Renaming either breaks existing dirs.

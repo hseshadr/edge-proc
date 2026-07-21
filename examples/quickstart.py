@@ -19,7 +19,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from shared_libs_python.vector_mgmt.core.types import IndexConfig, VectorEmbedding
+from edgeproc_core.vector_mgmt.core.types import IndexConfig, VectorEmbedding
 
 from edgeproc.localvec.encoder import TextEncoder
 from edgeproc.localvec.faiss_index import FaissVectorIndex

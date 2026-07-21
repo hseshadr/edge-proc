@@ -23,7 +23,7 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.5",
     "typer>=0.26.8",
-    "shared-libs-python>=0.2.0",  # >=0.2.0 ships shared_libs_python.errors (canonical errors)
+    "edgeproc-core>=0.2.0",  # >=0.2.0 ships edgeproc_core.errors (canonical errors)
 ]
 
 [project.optional-dependencies]
@@ -63,20 +63,20 @@ Repository = "https://github.com/hseshadr/edge-proc"
 Issues = "https://github.com/hseshadr/edge-proc/issues"
 
 [tool.uv.sources]
-# Open-source onboarding: clone ONLY this repo and `uv sync` — shared-libs-python
+# Open-source onboarding: clone ONLY this repo and `uv sync` — edgeproc-core
 # is pulled from public GitHub (it is not on PyPI).
 #
 # Pinned by full commit SHA, not by tag. A git TAG is mutable: whoever can push to
 # that repo can retarget `v0.2.0` at different code, and every clone would silently
 # resolve a dependency nobody reviewed. The SHA below is immutable and is the commit
 # `v0.2.0` pointed at when it was pinned (`git ls-remote ... refs/tags/v0.2.0^{}`) —
-# the release that ships the canonical-errors module (shared_libs_python.errors).
+# the release that ships the canonical-errors module (edgeproc_core.errors).
 # Re-resolve and update this line deliberately when moving to a new release.
-shared-libs-python = { git = "https://github.com/hseshadr/shared-libs-python.git", rev = "ed1c3f6414710cb27d1c01e5fc2d6cadf0214b25" }
+edgeproc-core = { git = "https://github.com/hseshadr/shared-libs-python.git", rev = "6cdf8475b223262821622a021c561aed9213a472" }
 
-# Co-developing shared-libs-python locally? Clone it next to this repo and swap the
+# Co-developing edgeproc-core locally? Clone it next to this repo and swap the
 # line above for a path source (uncomment):
-#   shared-libs-python = { path = "../shared-libs-python", editable = true }
+#   edgeproc-core = { path = "../shared-libs-python", editable = true }
 
 # The version is single-sourced from edgeproc/_version.py — hatchling reads it at
 # build time, so installed metadata and edgeproc.__version__ can never drift.
@@ -164,7 +164,7 @@ test = "pytest"
 # `gate` mirrors CI exactly (lint + format-check + typecheck + complexity + test).
 gate = ["lint", "fmt-check", "typecheck", "complexity", "test"]
 
-# shared-libs-python now installs from a git source (or a plain path override) into
+# edgeproc-core now installs from a git source (or a plain path override) into
 # site-packages, so it's on the normal import path and mypy resolves it directly —
 # no MYPYPATH needed. (mypy refuses a MYPYPATH that points into site-packages, which
 # is exactly what the old __file__-derived dance produced under a non-editable install.)

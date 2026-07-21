@@ -34,7 +34,7 @@ These are the seams already designed into the architecture, in rough priority or
 3. **Sigstore keyless bundle signing** — an alternative to pinned ed25519 keys, removing the
    private-key custody burden for publishers. *(Protocol seam exists; not built.)*
 4. **PyPI distribution** — EdgeProc currently installs from source / git; publishing wheels
-   to PyPI (with `shared-libs-python` resolvable) so `pip install edge-proc` Just Works.
+   to PyPI (with `edgeproc-core` resolvable) so `pip install edge-proc` Just Works.
 5. **More runtimes behind the same router seam** — the router is runtime-agnostic; growing
    the runtime catalog beyond LocalVec is the natural next step.
 

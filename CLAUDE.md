@@ -18,7 +18,7 @@ it here**. Design spec: `~/dev/project-ideas/oss/edgeproc.md`.
   pytest ≥90% coverage, poethepoet task runner.
 - Optional extras: `[localvec]` (faiss-cpu, sentence-transformers, rank-bm25,
   numpy) and `[bundles]` (httpx, structlog, cryptography, zstandard).
-- `shared-libs-python` resolves from public GitHub via a tag-pinned git source
+- `edgeproc-core` resolves from public GitHub via a tag-pinned git source
   in `pyproject.toml` (commented path-source override for local co-development).
 
 ## Layout

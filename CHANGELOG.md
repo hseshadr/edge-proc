@@ -19,6 +19,12 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
   never against a benchmark run at test time, so it cannot flake on machine variance.
 
 ### Changed
+- **Upstream dependency renamed `shared-libs-python` → `edgeproc-core`.** Imports move
+  from `shared_libs_python.*` to `edgeproc_core.*`, and the dependency spec, the
+  `[tool.uv.sources]` key, and the lock all follow. The upstream GitHub repository is
+  unchanged, so the git URL still reads `hseshadr/shared-libs-python`; only the
+  distribution and import names moved. The pin advances to the commit carrying the new
+  name — still a full immutable SHA, never a mutable tag.
 - **One implementation of sequence freshness.** `cas._sequence_violation` delegates its
   counter comparison to the public `is_fresh_sequence` predicate instead of keeping a
   private near-duplicate, so the two can no longer drift apart. Behavior is unchanged,
@@ -47,7 +53,7 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
 
 ### Notes
 - **A `v0.1.5` tag is deliberately HELD.** `publish.yml` triggers on `v*`, and edge-proc's
-  PyPI publish must stay blocked until `shared-libs-python` (a `Requires-Dist`) is itself
+  PyPI publish must stay blocked until `edgeproc-core` (a `Requires-Dist`) is itself
   on PyPI. Tagging is a separate, sequenced decision — not a step in finishing this work.
 
 ## [0.1.5] — 2026-07-20
