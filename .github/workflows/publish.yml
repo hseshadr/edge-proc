@@ -25,7 +25,7 @@ jobs:
     permissions:
       id-token: write # OIDC — PyPI verifies this against the registered trusted publisher.
       contents: read
-    uses: hseshadr/ci/.github/workflows/python-publish.yml@36bf999acd0617135497b62605e19bed29ee1b94 # ci-v2.0.0
+    uses: hseshadr/ci/.github/workflows/python-publish.yml@9e8cf2e170441a6250b9b3c1a7af8128539a388f # ci-v2.0.1
     with:
       working-directory: "."
       sync-args: "--frozen --all-extras"
