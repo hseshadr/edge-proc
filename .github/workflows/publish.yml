@@ -1,0 +1,30 @@
+# edge-proc — .github/workflows/publish.yml
+# PyPI release of `edge-proc` via OIDC Trusted Publishing. A `v*` tag push is the whole
+# trigger; there is NO PyPI token in this repo. One-time bootstrap (deferred — needs a
+# human): register the GitHub Actions trusted publisher on PyPI as a PENDING publisher
+# (edge-proc is not yet on PyPI). After the first OIDC publish creates the project, every
+# `git tag vX.Y.Z && git push --tags` releases automatically. The workflow filename + repo
+# + owner ARE the credential — no `twine` password, no stored API token.
+#
+# The publish re-runs `uv run poe gate` on the tagged ref before building, so nothing ships
+# unless it passes the same gate CI enforces.
+#
+# NOTE: hseshadr/ci is referenced at @ci-v2, which is not cut yet (pending). The reusable
+# OIDC workflows live on the ci repo's feat/oidc-publish branch until that tag is created.
+name: Publish (PyPI, OIDC)
+on:
+  push:
+    tags: ["v*"]
+# Top-level read-only; the OIDC write scope is granted on the publish job only (the ci repo
+# security policy forbids a top-level `id-token: write`).
+permissions:
+  contents: read
+jobs:
+  publish:
+    permissions:
+      id-token: write # OIDC — PyPI verifies this against the registered trusted publisher.
+      contents: read
+    uses: hseshadr/ci/.github/workflows/python-publish.yml@ci-v2
+    with:
+      working-directory: "."
+      sync-args: "--frozen --all-extras"
