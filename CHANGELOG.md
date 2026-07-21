@@ -98,7 +98,7 @@ so every already-signed bundle still verifies and materializes unchanged.
 
 ## [0.1.2] — 2026-07-11
 
-Propagation-chain release: re-pins the upstream Lego so downstream consumers can bump
+Propagation-chain release: re-pins the upstream dependency so downstream consumers can bump
 in one hop (`shared-libs-python v0.1.3 → edge-proc v0.1.2 → edge-reco`). No library
 code changes.
 

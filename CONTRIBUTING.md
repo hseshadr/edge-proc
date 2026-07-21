@@ -1,8 +1,8 @@
 # Contributing to EdgeProc
 
-Thanks for your interest in EdgeProc — the local-execution substrate behind the
-[edge-reco](https://github.com/hseshadr/edge-reco) reference product. Contributions of all
-sizes are welcome: bug reports, docs fixes, new runtimes, and substrate hardening.
+Thanks for your interest in EdgeProc — the local-execution substrate that ships signed,
+content-addressed data bundles to devices and runs search and ranking there. Contributions
+of all sizes are welcome: bug reports, docs fixes, new runtimes, and substrate hardening.
 
 ## TL;DR
 

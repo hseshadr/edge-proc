@@ -40,9 +40,8 @@ These are the seams already designed into the architecture, in rough priority or
 
 ## Out of scope
 
-- A hosted service or backend. EdgeProc is **purely a library/substrate** an app embeds —
-  the reference product [edge-reco](https://github.com/hseshadr/edge-reco) is where the
-  end-user experience lives.
+- A hosted service or backend. EdgeProc is **purely a library/substrate** an app embeds; the
+  end-user experience belongs to the application that depends on it.
 
 Have a use case that needs one of these sooner? Open a
 [feature request](.github/ISSUE_TEMPLATE/feature_request.md).

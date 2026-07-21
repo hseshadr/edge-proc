@@ -78,7 +78,7 @@ uv run edgeproc publish \
     --bundle-id catalog \
     --version 1.0.0 \
     --pretty
-#   published v1.0.0 manifest=9f3a1c4e7b02
+#   published v1.0.0 manifest=c4c28ab05da5
 ```
 
 `origin/` now holds the full CDN contract: `latest` (the signed pointer), `manifest/<hash>`, and `chunk/<hash>` (one zstd blob per unique chunk). Point a static server or CDN at it as-is.
@@ -94,7 +94,7 @@ uv run edgeproc sync \
     --key keys/public.key \
     --materialize-to materialized \
     --pretty
-#   synced v1.0.0 manifest=9f3a1c4e7b02 chunks_fetched=3 chunks_reused=0 bytes_fetched=4096
+#   synced v1.0.0 manifest=c4c28ab05da5 chunks_fetched=2 chunks_reused=0 bytes_fetched=5903
 ```
 
 Without `--key` (and without `EDGEPROC_TRUST_ROOT_PUBKEY_PATH` set) `sync` refuses to run — an unverifiable pull is rejected fail-closed.
@@ -110,11 +110,13 @@ uv run edgeproc route \
     --index-dir materialized/catalog_idx \
     --task task.json \
     --pretty
-#   success=True runtime=localvec latency=82.7ms
+#   success=True runtime=localvec latency=112.7ms
 #     p1  0.219
 #     p4  0.246
 #     p2  0.556
 ```
+
+Distances are deterministic for the same model and catalog; `latency` varies by machine.
 
 The exit code mirrors `success` (`0` ok, `1` for `no_runtime_accepted` or any verification failure), so scripts can branch on it without parsing JSON.
 
@@ -128,15 +130,42 @@ echo "tiny edit" >> src/catalog_idx/state.json
 uv run edgeproc publish \
     --src src --origin-dir origin --key keys/private.key \
     --bundle-id catalog --version 1.0.1 --pretty
+#   published v1.0.1 manifest=312b66ae9d63
 
 uv run edgeproc sync \
     --base-url origin --cache-dir cache --key keys/public.key \
     --materialize-to materialized --pretty
+#   synced v1.0.1 manifest=312b66ae9d63 chunks_fetched=1 chunks_reused=1 bytes_fetched=157
 ```
+
+157 bytes instead of the original 5,903 — one changed chunk re-fetched, the rest reused.
 
 ## 7. Try a tampered origin
 
-Corrupt any chunk under `origin/chunk/` and the next `sync` exits `1` with `sync failed: …` on stderr — it never promotes an unverified version into `cache/`. That's the fail-closed contract in one command.
+Corrupt any chunk under `origin/chunk/` and sync into a fresh cache:
+
+```bash
+printf 'corrupted' > "origin/chunk/$(ls origin/chunk | head -1)"
+
+uv run edgeproc sync \
+    --base-url origin --cache-dir cache3 --key keys/public.key --pretty
+#   sync failed: stored chunk failed to decompress
+echo $?
+#   1
+
+ls cache3
+#   chunks		manifests
+```
+
+A healthy cache has an `active/` directory; `cache3/` has none, because the bad version was
+never promoted. That's the fail-closed contract in one command.
+
+Sync also refuses to run at all without a pinned key:
+
+```bash
+uv run edgeproc sync --base-url origin --cache-dir cache2 --pretty
+#   no trust root: pass --key or set EDGEPROC_TRUST_ROOT_PUBKEY_PATH (refusing to sync)
+```
 
 ## Next steps
 

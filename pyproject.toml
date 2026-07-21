@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "edge-proc"
 dynamic = ["version"]
-description = "AI-native local execution substrate: a pure deterministic router over pluggable runtimes, a FAISS vector runtime, and a signed bundle/sync substrate. The foundational local-execution Lego."
+description = "Local execution substrate: ship signed, content-addressed data bundles to devices with fail-closed verification and delta sync, then run search and ranking locally through a deterministic router."
 readme = "README.md"
 requires-python = ">=3.13"
 license = { text = "MIT" }

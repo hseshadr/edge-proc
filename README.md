@@ -1,126 +1,69 @@
 # EdgeProc
 
-**Run AI search and ranking right on your own device — no cloud, no per-search bill, your data never leaves the machine.**
+**Ship a big file to a lot of devices — and let every one of them prove it's the real file, unmodified, before using it. Then send only the parts that changed.**
 
 [![CI](https://github.com/hseshadr/edge-proc/actions/workflows/ci.yml/badge.svg)](https://github.com/hseshadr/edge-proc/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/downloads/)
 
-## What is this? (plain version)
+## The problem, as a story
 
-Most apps that "search" or "recommend" things quietly ship your data off to a company's
-servers, run the search there, and send the answer back. That's slow, it costs money on
-every single request, and it means your private notes, messages, and files leave your
-device to do it.
+When a video game ships an update, your console doesn't re-download the whole 80 GB game. It
+downloads a small patch. And before it installs anything, it checks a signature to confirm the
+patch really came from the studio — not from someone who slipped a modified file onto a mirror.
 
-EdgeProc is a Python library that does that search and ranking **on the device itself** —
-your phone, your laptop, or a small box at the edge of a network. Nothing has to go to the
-cloud, so it's fast, free per request, and private by default.
+Plenty of software that isn't a game needs exactly that and rarely gets it. A search index. A
+machine-learning model. An offline catalog or price list. These files are big, they change
+often, and they have to land on phones, browsers, and small boxes you don't own or control.
 
-It also handles keeping that on-device search **up to date**: it can safely download new
-index files over the internet and check, with cryptography, that nobody tampered with them
-along the way. Think of it like an app store that verifies the signature on an update
-before installing it — except for your search index.
+Which leaves two awkward questions:
 
-## Status (verified 2026-07-16)
+1. **Is this actually my file?** It crossed someone else's network and sat on someone else's
+   CDN. If it arrived corrupted — or quietly swapped — would you find out? Or would your app
+   keep running and just start giving wrong answers?
+2. **Do I have to send all of it again?** If one row of a 400 MB index changed, making every
+   user re-download 400 MB is a real bandwidth bill and a bad experience.
 
-**EdgeProc now has an explicit memory-admission boundary for concurrent work.**
-`MemoryManager` reserves each task's declared memory budget before dispatch, rejects
-work that would exceed `max_in_flight_memory_mb`, and releases reservations on every
-success and exception path. The change is merged as `f3e3ca9` and the hosted main CI
-run passed.
+**EdgeProc is a Python library that answers both.** You publish once; any number of devices
+pull the update, verify it genuinely came from you and arrived intact, and fetch only the
+bytes that actually changed.
 
-Run the same proof locally:
+## How it answers them
+
+- **Every file is split into chunks, and each chunk is named by a fingerprint of its own
+  contents.** That fingerprint (a SHA-256 hash) changes completely if even one byte changes —
+  so a corrupted or tampered chunk no longer matches the name it was requested under, and is
+  refused. The technical name for this is a *content-addressed store*, or CAS.
+- **Exactly one small file is signed, and it vouches for everything else.** The publisher signs
+  a *version pointer*: a few bytes saying "version 1.0.1 is live, and its file list is
+  `<hash>`". That file list (the *manifest*) names every chunk by hash. So one signature check
+  covers the entire release, and there's only one secret to protect.
+- **Chunk boundaries follow the content, not fixed offsets.** Edit one line in the middle of a
+  big file and only the chunk holding that line changes — everything after it keeps its old
+  fingerprint instead of shifting. That's what makes the next update a small delta.
+- **If verification fails, nothing is installed.** Not "installed with a warning." The sync
+  exits non-zero and the previous good version stays live.
+
+Once the data has landed, EdgeProc also runs the search and ranking **on the device** — no
+embedding API, no vector database, no ranking server in the request path.
+
+## See it work
+
+Everything below was run to produce the output shown. About five minutes, most of it a
+one-time model download.
 
 ```bash
-uv sync --all-extras
-uv run poe gate
-uv run python benchmarks/benchmark.py
+git clone https://github.com/hseshadr/edge-proc.git
+cd edge-proc
+uv sync --all-extras   # first run also downloads a ~90 MB embedding model
 ```
 
-The current gate is 255 tests with 98.72% coverage; the benchmark reports sub-0.1 ms
-search p95, 47.8 ms cold-sync p95, 15.6 ms warm-sync p95, and 114.2 MiB peak RSS
-against a 512 MiB admission budget. That budget is deterministic admission control,
-not a promise to cap native FAISS/NumPy allocations; the host or container owns RSS,
-CPU, and process-level termination.
+### 1. Make something worth shipping
 
-## Where it fits
+A small product catalog, turned into a searchable index on disk.
 
-EdgeProc is the reusable **substrate** that makes on-device compute possible: it ships your
-search index as a signed, content-addressed bundle any CDN can serve, verifies it fail-closed,
-and runs the inference locally — the generic Lego other products build on.
-[**edge-reco**](https://github.com/hseshadr/edge-reco) is the reference product built on it — a
-full search + recommendation engine running entirely in the browser ([live demo](https://edge-reco.com)).
-EdgeProc itself builds on [**shared-libs-python**](https://github.com/hseshadr/shared-libs-python),
-the vector-partitioning protocol its FAISS runtime implements.
-
-## What you'd use it for
-
-Moving compute to the edge buys you four things at once. The index + data ship as a static,
-signed, content-addressed bundle any CDN serves; inference runs on the device — so there's
-no embedding API, vector DB, or ranking server in the request path:
-
-- **Zero-marginal-cost compute.** Every per-request cloud bill (embeddings, vector search,
-  reranking) becomes a one-time bundle build. The Nth query costs you nothing.
-- **Scales on the clients, not your servers.** A traffic spike — Black Friday, a launch, a
-  Hacker News hug — is absorbed by users' own devices. No autoscaling bill, nothing to fall
-  over.
-- **Resilient on weak, flaky, or dropped connections.** After a one-time sync the consumer
-  needs no network. An offline-first assistant still searches your local notes with no
-  signal.
-- **Trustworthy by construction.** Fail-closed Ed25519 + SHA-256 means an unverifiable or
-  tampered pull is *rejected, not silently served* — like an app store checking an update's
-  signature before installing it, but for your search index. And because the data is searched
-  and ranked locally, it never leaves the device.
-
-Concretely: an on-device recommender that suggests the next item with no per-search cloud
-bill no matter how many users you have; a privacy-first app where user data never leaves the
-machine; an edge or IoT box that needs fast local search without standing up a backend.
-[edge-reco](https://github.com/hseshadr/edge-reco) puts all four together — a browser-native
-storefront with search + recommendations and zero backend calls after sync.
-
-## Quickstart
-
-Here's the whole thing working in a few lines. Grab the deps with the clone-and-go
-[setup below](#install) (`git clone … && uv sync --all-extras`) — first run downloads
-`all-MiniLM-L6-v2` (~90 MB). (Once edge-proc is on PyPI: `pip install edge-proc[localvec]`.)
-
-```python
-import asyncio
-
-from edgeproc import EdgeProc, PrivacyMode, RuntimeRegistry, Task, TaskKind
-from edgeproc.localvec.encoder import TextEncoder
-from edgeproc.localvec.runtime import LocalVecRuntime
-
-CATALOG = {"p1": "red running shoes", "p2": "waterproof hiking boots", "p3": "trail sneakers"}
-
-
-async def main() -> None:
-    runtime = await LocalVecRuntime.from_texts(CATALOG, encoder=TextEncoder())
-    registry = RuntimeRegistry(); registry.register(runtime)
-    result = await EdgeProc(registry=registry).run(
-        Task(kind=TaskKind.SEARCH, payload={"query": "shoes for running"}, privacy_mode=PrivacyMode.LOCAL_ONLY)
-    )
-    for entity_id, distance in result.payload["results"]:
-        print(f"  {entity_id}  {CATALOG[entity_id]:<24} distance={distance:.3f}")
-
-
-asyncio.run(main())
-```
-
-Swap `TaskKind.SEARCH` for `TaskKind.EMBED` (raw vectors) or `TaskKind.RANK` (hybrid
-keyword + meaning-based ranking).
-
-### …or from the CLI: `route`
-
-Prefer the shell? Persist an index once, drop your `Task` in a JSON file, and `route` it —
-the CLI loads the saved index, runs the task, and prints the result. The exit code mirrors
-success (`0` ok, `1` otherwise), so scripts can branch on it.
-
-First persist the catalog (a saved index is the search-index file plus a small `state.json`):
-
-```python
-# save_index.py
+```bash
+cat > save_index.py <<'PY'
 import asyncio
 from pathlib import Path
 
@@ -151,40 +94,208 @@ async def main() -> None:
 
 
 asyncio.run(main())
+PY
+
+uv run python save_index.py
+ls catalog_idx
 ```
 
-Then route a task against it:
+```text
+index.faiss
+state.json
+```
+
+### 2. Mint a signing key
+
+`private.key` stays on your build machine forever. `public.key` is what devices are given, and
+it's the only thing they have to trust.
 
 ```bash
-python save_index.py
+uv run edgeproc keygen --out keys
+```
 
+```text
+wrote keys/private.key and keys/public.key
+```
+
+### 3. Publish a signed release
+
+```bash
+mkdir -p src && cp -r catalog_idx src/
+
+uv run edgeproc publish \
+    --src src --origin-dir origin \
+    --key keys/private.key \
+    --bundle-id catalog --version 1.0.0 --pretty
+```
+
+```text
+published v1.0.0 manifest=c4c28ab05da5
+```
+
+`origin/` is now a plain directory of hash-named files. Put it behind any static web server or
+CDN as-is — there is no application server to run.
+
+### 4. Pull it onto a device
+
+```bash
+uv run edgeproc sync \
+    --base-url origin --cache-dir cache \
+    --key keys/public.key \
+    --materialize-to materialized --pretty
+```
+
+```text
+synced v1.0.0 manifest=c4c28ab05da5 chunks_fetched=2 chunks_reused=0 bytes_fetched=5903
+```
+
+### 5. Search the file that just arrived
+
+```bash
 cat > task.json <<'JSON'
 {"kind": "search", "payload": {"query": "shoes for running", "k": 3}, "privacy_mode": "local_only"}
 JSON
 
-edgeproc route --index-dir catalog_idx --task task.json --pretty
+uv run edgeproc route --index-dir materialized/catalog_idx --task task.json --pretty
 ```
 
 ```text
-success=True runtime=localvec latency=82.7ms
+success=True runtime=localvec latency=112.7ms
   p1  0.219
   p4  0.246
   p2  0.556
 ```
 
-Drop `--pretty` for the full result as JSON. A missing index or an unroutable task fails
-closed: non-zero exit and a message on stderr.
+`p1` is "red running shoes" and `p4` is "trail running sneakers" — matched by meaning, on the
+machine, with nothing in the request path but local code. The hashes and distances above
+reproduce exactly; only `latency` varies by machine.
+
+### 6. Now watch it refuse to be fooled
+
+This is the part worth trying yourself, because it's the whole point.
+
+**Nothing changed? Then nothing is downloaded.**
+
+```bash
+uv run edgeproc sync --base-url origin --cache-dir cache --key keys/public.key --pretty
+```
+
+```text
+synced v1.0.0 manifest=c4c28ab05da5 chunks_fetched=0 chunks_reused=2 bytes_fetched=0
+```
+
+**A small edit ships as a small delta.** Publish `1.0.1` with one line appended, then re-sync:
+
+```bash
+echo "tiny edit" >> src/catalog_idx/state.json
+
+uv run edgeproc publish --src src --origin-dir origin --key keys/private.key \
+    --bundle-id catalog --version 1.0.1 --pretty
+uv run edgeproc sync --base-url origin --cache-dir cache --key keys/public.key \
+    --materialize-to materialized --pretty
+```
+
+```text
+published v1.0.1 manifest=312b66ae9d63
+synced v1.0.1 manifest=312b66ae9d63 chunks_fetched=1 chunks_reused=1 bytes_fetched=157
+```
+
+157 bytes instead of 5,903 — it re-fetched the one chunk that changed and reused the rest.
+
+**No key means no sync.** There is no "just this once" mode:
+
+```bash
+uv run edgeproc sync --base-url origin --cache-dir cache2 --pretty; echo "exit=$?"
+```
+
+```text
+no trust root: pass --key or set EDGEPROC_TRUST_ROOT_PUBKEY_PATH (refusing to sync)
+exit=1
+```
+
+**Corrupt a chunk on the server and the device rejects the whole release.** Overwrite any file
+under `origin/chunk/` and sync into a fresh cache:
+
+```bash
+printf 'corrupted' > "origin/chunk/$(ls origin/chunk | head -1)"
+uv run edgeproc sync --base-url origin --cache-dir cache3 --key keys/public.key --pretty
+echo "exit=$?"
+ls cache3
+```
+
+```text
+sync failed: stored chunk failed to decompress
+exit=1
+chunks
+manifests
+```
+
+Compare that to the healthy `cache/`, which has an `active` directory. `cache3/` never got one:
+the bad version was never promoted, and a device in this state keeps serving the last good
+version instead of silently serving corrupted data.
+
+### Prefer to stay in Python?
+
+The same search, in-process, without the CLI:
+
+```python
+import asyncio
+
+from edgeproc import EdgeProc, PrivacyMode, RuntimeRegistry, Task, TaskKind
+from edgeproc.localvec.encoder import TextEncoder
+from edgeproc.localvec.runtime import LocalVecRuntime
+
+CATALOG = {"p1": "red running shoes", "p2": "waterproof hiking boots", "p3": "trail sneakers"}
+
+
+async def main() -> None:
+    runtime = await LocalVecRuntime.from_texts(CATALOG, encoder=TextEncoder())
+    registry = RuntimeRegistry(); registry.register(runtime)
+    result = await EdgeProc(registry=registry).run(
+        Task(kind=TaskKind.SEARCH, payload={"query": "shoes for running"}, privacy_mode=PrivacyMode.LOCAL_ONLY)
+    )
+    for entity_id, distance in result.payload["results"]:
+        print(f"  {entity_id}  {CATALOG[entity_id]:<24} distance={distance:.3f}")
+
+
+asyncio.run(main())
+```
+
+```text
+  p1  red running shoes        distance=0.219
+  p3  trail sneakers           distance=0.374
+  p2  waterproof hiking boots  distance=0.556
+```
+
+Swap `TaskKind.SEARCH` for `TaskKind.EMBED` (raw vectors) or `TaskKind.RANK` (keyword +
+meaning-based ranking combined).
+
+## Why you'd reach for this
+
+Moving both the data and the compute to the device buys four things at once:
+
+- **The Nth query costs nothing.** Per-request cloud bills for embeddings, vector search, and
+  reranking collapse into a one-time bundle build.
+- **Traffic spikes land on clients, not your servers.** A launch or a front-page link is
+  absorbed by users' own devices. Nothing to autoscale, nothing to fall over.
+- **It survives weak or absent connectivity.** After one sync the device needs no network at
+  all to keep answering queries.
+- **Tampering is caught, not tolerated.** Verification is fail-closed, and because the data is
+  searched locally, it never leaves the device to begin with.
+
+Typical shapes: an app that recommends the next item with no per-search cloud bill however many
+users you have; a privacy-sensitive tool where user data must never leave the machine; an edge
+or IoT box that needs fast local search without standing up a backend.
 
 ---
 
 ## Under the hood (for developers)
 
-Everything above is the friendly surface. Here's what actually happens, with the real
-terms.
+Everything above is the friendly surface. Here is what actually happens, in the real terms.
 
 ### Install
 
-edge-proc isn't on PyPI yet, so the working install is the clone-and-go setup below — one
+edge-proc isn't on PyPI yet, so the working install is the clone-and-go setup above — one
 command, no sibling checkouts:
 
 ```bash
@@ -194,9 +305,9 @@ uv sync --all-extras   # core + extras + dev tooling
 ```
 
 That Just Works — `shared-libs-python` isn't on PyPI either, so `pyproject.toml` pins it to a
-release tag from public GitHub (see `[tool.uv.sources]`); `uv sync` fetches it for you,
-nothing else to clone. Co-developing `shared-libs-python` alongside EdgeProc? Clone it next
-to this repo and swap the git source for the commented path source in `pyproject.toml`.
+release tag from public GitHub (see `[tool.uv.sources]`); `uv sync` fetches it for you, nothing
+else to clone. Co-developing `shared-libs-python` alongside EdgeProc? Clone it next to this repo
+and swap the git source for the commented path source in `pyproject.toml`.
 
 Once edge-proc is published to PyPI, the extras install directly:
 
@@ -207,98 +318,52 @@ pip install edge-proc[bundles]           # + manifest + checksum sync substrate
 pip install edge-proc[localvec,bundles]  # full local substrate
 ```
 
-EdgeProc is **purely a dependency** — a library an app embeds, not a service you sign up
-for. The core is tiny; the heavy machinery (FAISS, sync) is opt-in behind extras. It builds
-on [`shared-libs-python`](https://github.com/hseshadr/shared-libs-python): the FAISS index
-here is a concrete implementation of that library's `VectorIndex` Protocol.
+EdgeProc is **purely a dependency** — a library an application embeds, not a service you sign
+up for. The core is tiny; the heavy machinery (FAISS, sync) is opt-in behind extras. It builds
+on [`shared-libs-python`](https://github.com/hseshadr/shared-libs-python): the FAISS index here
+is a concrete implementation of that library's `VectorIndex` Protocol.
 
 ### The deterministic router
 
 You hand EdgeProc a `Task` and a router picks which engine (a "runtime") serves it. **That
-router is a plain rulebook, never an AI** — it asks each registered runtime "do you accept
-this task?" and picks the first that says yes. Because it's a pure function, the same `Task`
-against the same runtimes always routes the same way, so a trace is replayable and you can
-prove which runtime touched a request. (Useful when a regulator, or future you, asks.)
+router is a plain rulebook, never an AI** — it asks each registered runtime "do you accept this
+task?" and picks the first that says yes. Because it's a pure function, the same `Task` against
+the same runtimes always routes the same way, so a trace is replayable and you can prove which
+runtime touched a request.
 
 ### The typed result and the Task/budget model
 
-A `Task` carries its `kind` (`EMBED` / `SEARCH` / `RANK`), a `payload`, a `privacy_mode`,
-and a latency/memory **budget declaration**. `EdgeProc` admits work through a
-thread-safe `MemoryManager`: the sum of declared in-flight reservations cannot exceed
-`max_in_flight_memory_mb`, and every reservation releases in a `finally`-safe context.
-This is deterministic admission control, not a native-RSS limit: the budget remains a
-declaration, not an enforcement boundary for allocations inside FAISS, NumPy, or another
-native runtime. Share one `MemoryManager` across facades when they share a process. Every run returns a typed
-`ResultEnvelope` — a structured object with `success`, the serving `runtime`, `latency`,
-and the `payload` — not a loose dict. Typed in, typed out.
+A `Task` carries its `kind` (`EMBED` / `SEARCH` / `RANK`), a `payload`, a `privacy_mode`, and a
+latency/memory **budget declaration**. `EdgeProc` admits work through a thread-safe
+`MemoryManager`: the sum of declared in-flight reservations cannot exceed
+`max_in_flight_memory_mb`, and every reservation releases in a `finally`-safe context. This is
+deterministic admission control, **not** a native-RSS limit: the budget remains a declaration,
+not an enforcement boundary for allocations inside FAISS, NumPy, or another native runtime. The
+host or container owns RSS, CPU, and process-level termination. Share one `MemoryManager` across
+facades when they share a process.
 
-### keygen → publish → sync: shipping an index to the edge
+Every run returns a typed `ResultEnvelope` — a structured object with `success`, the serving
+`runtime`, `latency`, and the `payload` — not a loose dict. Typed in, typed out.
 
-So far the index lived on the same machine that routed against it. The `[bundles]` substrate
-closes the loop: build a **signed bundle** once on a publisher, then pull it onto any number
-of consumers — over the filesystem or a CDN — with cryptographic proof you got exactly what
-the publisher signed, re-fetching only the chunks that changed.
-
-Two ideas do the heavy lifting:
-
-- **Content-addressed + signed bundles.** Every file is split into chunks, and each chunk is
-  named by its own sha256 hash — so any tampering changes the name and is caught immediately.
-  A single small **signed version pointer** (`/latest`) says which version is live; it's the
-  only thing signed, and it names the manifest by hash, which names every chunk by hash.
-- **Content-defined chunking (GearCDC).** Files are split by their *content*, not at fixed
-  offsets, so a one-line edit to a big index only changes one chunk — an update downloads
-  only the pieces that actually changed, not the whole file.
-
-```bash
-# 1. Mint a trust root. private.key signs on the publisher; public.key is the pin
-#    a consumer trusts. Distribute public.key out-of-band; never ship private.key.
-edgeproc keygen --out keys
-
-# 2. Stage the files to ship, then publish: chunk + sign them into a content-addressed
-#    origin dir. `publish` records paths relative to --src.
-mkdir -p src && cp -r catalog_idx src/
-edgeproc publish \
-    --src src \
-    --origin-dir origin \
-    --key keys/private.key \
-    --bundle-id catalog \
-    --version 1.0.0 \
-    --pretty
-
-# 3. On the consumer: sync into a fresh cache, trusting ONLY the pinned pubkey.
-#    Pass --key, or set EDGEPROC_TRUST_ROOT_PUBKEY_PATH. With neither, sync refuses to
-#    run — an unverifiable pull is rejected fail-closed. --materialize-to reassembles
-#    every synced file into a plain directory a follow-on `route` can read.
-edgeproc sync \
-    --base-url origin \
-    --cache-dir cache \
-    --key keys/public.key \
-    --materialize-to materialized \
-    --pretty
-```
+### The verification chain, precisely
 
 `sync` verifies the pointer signature against the pinned trust-root pubkey **before trusting
-anything**, diffs the manifest against the local cache, fetches only missing chunks,
-re-checks every chunk against its content address, and atomically promotes the new version.
-A tampered chunk fails its content-address check; a forged pointer fails its signature
-check — both exit non-zero with no traceback, and never promote into `cache/`. Re-syncing an
-unchanged origin fetches nothing; a `1.0.0 → 1.0.1` push is a delta, not a full
-re-download. Add `--http` to `sync` (serving `origin/` over any static HTTP/CDN) to go over
-the wire instead of the filesystem. This is "edge as a CDN".
+anything**, diffs the manifest against the local cache, fetches only missing chunks, re-checks
+every chunk against its content address, and only then atomically promotes the new version. A
+tampered chunk fails its content-address check; a forged pointer fails its signature check —
+both exit non-zero with no traceback, and neither promotes into the cache.
 
-The materialized directory holds the exact files you published, so the consumer can `route`
-against the freshly delivered index directly:
-
-```bash
-edgeproc route --index-dir materialized/catalog_idx --task task.json --pretty
-```
+Chunking is content-defined (GearCDC) and chunks are zstd-compressed. Add `--http` to `sync`,
+serving `origin/` over any static HTTP server or CDN, to go over the wire instead of the
+filesystem; the contract is identical and only the transport changes.
 
 ### Configuration: `EdgeProcSettings` + `EDGEPROC_`-prefixed env vars
 
 Deploy-time config is read lazily from the environment / `.env` via `EdgeProcSettings`
-(`edgeproc/core/settings.py`). It validates documented settings but ignores unrelated host variables,
-so an embedded library coexists with the application's own environment. Env vars use the
-`EDGEPROC_` prefix (except the HF token, which uses the ecosystem-standard `HF_TOKEN`):
+(`edgeproc/core/settings.py`). It validates documented settings but
+ignores unrelated host variables, so an embedded library coexists with the application's own
+environment. Env vars use the `EDGEPROC_` prefix (except the HF token, which uses the
+ecosystem-standard `HF_TOKEN`):
 
 | Setting | Env var | Default | Purpose |
 | --- | --- | --- | --- |
@@ -314,14 +379,27 @@ so an embedded library coexists with the application's own environment. Env vars
 | `rrf_k_window` | `EDGEPROC_RRF_K_WINDOW` | `60` | RRF rank-window constant for hybrid fusion. |
 | `trust_root_pubkey_path` | `EDGEPROC_TRUST_ROOT_PUBKEY_PATH` | `None` | Pinned sync trust-root pubkey (no key ⇒ `sync` refused). |
 
-For the full picture — system context, bundle lifecycle, the verification chain, and the
-module map — see [**docs/ARCHITECTURE.md**](docs/ARCHITECTURE.md) (with d2 diagrams).
+For the full picture — system context, bundle lifecycle, the verification chain, and the module
+map — see [**docs/ARCHITECTURE.md**](docs/ARCHITECTURE.md) (with d2 diagrams).
+
+### Measured numbers
+
+```bash
+uv sync --all-extras
+uv run poe gate
+uv run python benchmarks/benchmark.py
+```
+
+The gate is 259 tests at 98.73% coverage. On one developer laptop the benchmark reports 0.09 ms
+search p95, 55 ms cold-sync p95, 18 ms warm-sync p95, and 114 MiB peak RSS against a 512 MiB
+admission budget. Those are one machine's numbers on a synthetic fixture — treat them as a
+shape, not a guarantee.
 
 ## Status & roadmap
 
-**Shipped (v0):** a deterministic non-AI router, a FAISS-backed local-vector runtime
-(`EMBED` / `SEARCH` / `RANK`), and a content-addressed, signed-bundle sync substrate
-(pinned ed25519 + content-defined chunking), all behind opt-in extras.
+**Shipped (v0):** a deterministic non-AI router, a FAISS-backed local-vector runtime (`EMBED` /
+`SEARCH` / `RANK`), and a content-addressed, signed-bundle sync substrate (pinned ed25519 +
+content-defined chunking), all behind opt-in extras.
 
 **Roadmap — not built yet** (kept as Protocol seams, not in v0):
 
@@ -334,22 +412,13 @@ module map — see [**docs/ARCHITECTURE.md**](docs/ARCHITECTURE.md) (with d2 dia
 
 ## Docs
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system context, bundle lifecycle, CAS + manifest, module boundaries, seams.
-- [docs/QUICKSTART.md](docs/QUICKSTART.md) — clone → gate → CLI walkthrough of the full `keygen → publish → sync → route` loop in five minutes.
-- [docs/OPERATIONS.md](docs/OPERATIONS.md) — threat model, privacy flow, recovery/SLA ownership, resource ceilings, and measured performance gate.
+- [docs/QUICKSTART.md](docs/QUICKSTART.md) — the `keygen → publish → sync → route` loop as a
+  standalone five-minute walkthrough.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system context, bundle lifecycle, CAS +
+  manifest, module boundaries, seams.
+- [docs/OPERATIONS.md](docs/OPERATIONS.md) — threat model, privacy flow, recovery/SLA ownership,
+  resource ceilings, and the measured performance gate.
 - [docs/diagrams/](docs/diagrams/) — d2 sources + rendered SVGs.
-
-## The stack
-
-EdgeProc is the middle layer of a three-repo system, all MIT-licensed:
-
-- [**edge-reco**](https://github.com/hseshadr/edge-reco) — the reference product built on
-  this substrate: a browser-native storefront with hybrid search + session-aware
-  recommendations, zero backend calls after sync ([live demo](https://edge-reco.com)).
-- **edge-proc** (this repo) — the reusable local-compute substrate: signed bundle sync, a
-  CAS cache, fail-closed verification, and hybrid retrieval primitives.
-- [**shared-libs-python**](https://github.com/hseshadr/shared-libs-python) — the
-  vector-partitioning protocol EdgeProc's FAISS/localvec runtime builds on.
 
 ## Develop
 
@@ -363,10 +432,12 @@ uv run poe gate        # lint + format-check + mypy strict + Radon Grade A + pyt
 ## About
 
 **EdgeProc** — also written `edge-proc` and `edgeproc`; canonical repo
-[`hseshadr/edge-proc`](https://github.com/hseshadr/edge-proc) — is the open-source,
-local-first search/ranking substrate described above. Canonical entity page:
-[edge-reco.com/edgeproc](https://edge-reco.com/edgeproc) — EdgeProc on the domain we
-control. It is **not affiliated with any other product or company named "EdgeProc"**.
+[`hseshadr/edge-proc`](https://github.com/hseshadr/edge-proc) — is the open-source, local-first
+delivery-and-search substrate described above. It builds on
+[**shared-libs-python**](https://github.com/hseshadr/shared-libs-python), the vector-partitioning
+protocol its FAISS runtime implements. Canonical entity page:
+[edge-reco.com/edgeproc](https://edge-reco.com/edgeproc), on a domain we control. It is **not
+affiliated with any other product or company named "EdgeProc"**.
 
 ## License
 
