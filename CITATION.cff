@@ -5,8 +5,8 @@ abstract: >-
   EdgeProc (also written edge-proc) is an open-source, local-first substrate for
   on-device AI search and ranking: signed, content-addressed index bundles with
   fail-closed Ed25519 verification, a FAISS vector runtime (EMBED / SEARCH / RANK),
-  and a deterministic, non-AI task router. The reusable substrate; edge-reco is the
-  reference product built on it. Not affiliated with any other product named EdgeProc.
+  and a deterministic, non-AI task router. A reusable dependency that applications embed.
+  Not affiliated with any other product named EdgeProc.
 type: software
 authors:
   - family-names: Seshadri
@@ -15,7 +15,7 @@ authors:
 repository-code: "https://github.com/hseshadr/edge-proc"
 url: "https://github.com/hseshadr/edge-proc"
 license: MIT
-version: 0.1.1
+version: 0.1.5
 keywords:
   - edgeproc
   - edge-proc

@@ -22,6 +22,7 @@ from edgeproc._version import __version__
 from edgeproc.core.facade import EdgeProc
 from edgeproc.core.models import JsonValue, ResultEnvelope, Task
 from edgeproc.core.registry import RuntimeRegistry
+from edgeproc.errors import CONFIG_INVALID, CONFIG_MISSING, INTERNAL_UNKNOWN, ErrorCode, code_of
 
 if TYPE_CHECKING:
     from edgeproc.bundles.adapters import FetchAdapter
@@ -175,6 +176,37 @@ def publish(
 
 
 @app.command()
+def gc(
+    cache_dir: Annotated[Path, typer.Option(help="Local content-addressed store to sweep.")],
+    pretty: Annotated[bool, typer.Option(help="Print a human summary instead of JSON.")] = False,
+) -> None:
+    """Reclaim disk by deleting every chunk/manifest the ACTIVE pointer does not reference.
+
+    The operator entry point for the sweep described in ``docs/OPERATIONS.md``. It runs
+    behind the store's mutation lock, so it is serialized against a concurrent ``sync``
+    rather than racing it. A store with nothing promoted is left completely untouched —
+    a fail-safe no-op, never a wipe. Exit 0 on success, 1 on an integrity failure.
+    """
+    try:
+        # Lazy: the bundles substrate is an optional extra, not a core dependency.
+        from edgeproc.bundles.cas import FilesystemCacheStore  # noqa: PLC0415
+    except ImportError:  # pragma: no cover - exercised only without the [bundles] extra
+        _fail("install edge-proc[bundles] to use gc")
+    removed = _run_gc(FilesystemCacheStore(cache_dir))
+    typer.echo(f"reclaimed {removed} objects" if pretty else json.dumps({"removed": removed}))
+
+
+def _run_gc(store: CacheStore) -> int:
+    """Sweep unreferenced objects, mapping an integrity/lock failure to exit 1, no traceback."""
+    from edgeproc.bundles.cas import IntegrityError  # noqa: PLC0415
+
+    try:
+        return store.gc()
+    except (IntegrityError, OSError) as exc:
+        _fail_with_code(f"gc failed: {exc}", exc)
+
+
+@app.command()
 def keygen(
     out: Annotated[Path, typer.Option(help="Dir to write private.key + public.key (raw ed25519).")],
 ) -> None:
@@ -255,7 +287,7 @@ def _load_task(path: Path) -> Task:
     try:
         return Task.model_validate_json(path.read_text())
     except (OSError, ValidationError) as exc:
-        _fail(f"could not load task from {path}: {exc}")
+        _fail(f"could not load task from {path}: {exc}", CONFIG_INVALID)
 
 
 def _route_runtime(index_dir: Path, model: str | None, index_name: str) -> Runtime:
@@ -318,7 +350,10 @@ def _resolve_trust_key(key: Path | None) -> Path:
 
     resolved = key if key is not None else EdgeProcSettings().trust_root_pubkey_path
     if resolved is None:
-        _fail("no trust root: pass --key or set EDGEPROC_TRUST_ROOT_PUBKEY_PATH (refusing to sync)")
+        _fail(
+            "no trust root: pass --key or set EDGEPROC_TRUST_ROOT_PUBKEY_PATH (refusing to sync)",
+            CONFIG_MISSING,
+        )
     return resolved
 
 
@@ -334,11 +369,11 @@ def _load_verifier(key: Path | None, verifier_cls: type[Ed25519Verifier]) -> Ver
     try:
         raw = path.read_bytes()
     except OSError as exc:
-        _fail(f"could not read trust-root key {path}: {exc}")
+        _fail(f"could not read trust-root key {path}: {exc}", CONFIG_MISSING)
     try:
         return verifier_cls.from_public_bytes(raw)
     except ValueError as exc:
-        _fail(f"malformed trust-root key {path}: {exc}")
+        _fail(f"malformed trust-root key {path}: {exc}", CONFIG_INVALID)
 
 
 def _run_sync(
@@ -368,7 +403,7 @@ def _run_sync(
             expected_channel=expected_channel,
         )
     except (SignatureError, IntegrityError, httpx.HTTPError, OSError) as exc:
-        _fail(f"sync failed: {exc}")
+        _fail_with_code(f"sync failed: {exc}", exc)
     finally:
         if close:
             # The FetchAdapter Protocol has no close(); only HttpAdapter does (it owns a
@@ -425,11 +460,11 @@ def _load_signer(key: Path, signer_cls: type[Ed25519Signer]) -> Signer:
     try:
         raw = key.read_bytes()
     except OSError as exc:
-        _fail(f"could not read signing key {key}: {exc}")
+        _fail(f"could not read signing key {key}: {exc}", CONFIG_MISSING)
     try:
         return signer_cls.from_private_bytes(raw)
     except ValueError as exc:
-        _fail(f"malformed signing key {key}: {exc}")
+        _fail(f"malformed signing key {key}: {exc}", CONFIG_INVALID)
 
 
 def _read_src(src: Path) -> dict[str, bytes]:
@@ -450,6 +485,17 @@ def _render_pointer(pointer: VersionPointer, *, pretty: bool) -> str:
     return pointer.model_dump_json(indent=2)
 
 
-def _fail(message: str) -> NoReturn:
-    typer.echo(message, err=True)
+def _fail(message: str, code: ErrorCode = INTERNAL_UNKNOWN) -> NoReturn:
+    """Exit 1 with an operator-facing message stamped with its canonical error code.
+
+    The code prefix is what makes the catalog in :mod:`edgeproc.errors` real at the
+    surface an operator actually reads: ``[config.missing] no trust root: ...`` is
+    greppable and maps onto the same RFC 9457 ``type`` a library consumer would render.
+    """
+    typer.echo(f"[{code}] {message}", err=True)
     raise typer.Exit(code=1)
+
+
+def _fail_with_code(message: str, error: BaseException) -> NoReturn:
+    """Exit 1, resolving the canonical code the raised error itself carries."""
+    _fail(message, code_of(error))

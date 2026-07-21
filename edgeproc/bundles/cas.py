@@ -39,6 +39,7 @@ from edgeproc.bundles.manifest import (
     IndexManifest,
     VersionPointer,
     canonical_bytes,
+    is_fresh_sequence,
     validate_sha256_hex,
 )
 from edgeproc.core.settings import EdgeProcSettings
@@ -307,12 +308,16 @@ def _is_downgrade(incoming: VersionPointer, active: VersionPointer) -> bool:
 
 
 def _sequence_violation(incoming: VersionPointer, active: VersionPointer) -> bool:
-    """Reject lower counters and equal-counter equivocation; leave legacy behavior intact."""
-    if incoming.sequence is None or active.sequence is None:
-        return False
-    if incoming.sequence != active.sequence:
-        return incoming.sequence < active.sequence
-    return incoming != active
+    """Reject a pointer that is not strictly fresher — except an identical re-promote.
+
+    The counter comparison is :func:`is_fresh_sequence`, so there is exactly ONE
+    implementation of "is this sequence fresher" and the public predicate can never
+    drift from what promotion actually enforces. Promotion adds the one rule the pure
+    predicate does not carry: re-promoting the byte-identical active pointer is
+    idempotent, not equivocation. A legacy pointer (either counter unset) is
+    undecidable, so ``is_fresh_sequence`` returns True and PEP 440 still decides.
+    """
+    return not is_fresh_sequence(incoming, active) and incoming != active
 
 
 def _version_downgrade(incoming: str, active: str) -> bool:

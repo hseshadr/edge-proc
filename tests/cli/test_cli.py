@@ -131,6 +131,8 @@ def test_sync_missing_trust_key_fails_closed(tmp_path: Path) -> None:
     assert result.exit_code == 1
     assert "Traceback" not in result.stderr
     assert "trust-root key" in result.stderr
+    # The operator sees the canonical code, not just prose: a missing key file is config.missing.
+    assert "[config.missing]" in result.stderr
 
 
 def test_sync_malformed_trust_key_fails_closed(tmp_path: Path) -> None:
@@ -153,6 +155,8 @@ def test_sync_malformed_trust_key_fails_closed(tmp_path: Path) -> None:
     assert result.exit_code == 1
     assert "Traceback" not in result.stderr
     assert "malformed trust-root key" in result.stderr
+    # A present-but-corrupt key is a DIFFERENT canonical code than an absent one.
+    assert "[config.invalid]" in result.stderr
 
 
 def _save_catalog_index(directory: Path) -> None:
@@ -284,3 +288,111 @@ def test_materialize_refuses_traversal_before_writing(tmp_path: Path) -> None:
         _cli_app_module._materialize_files(object(), manifest, out)
 
     assert not (tmp_path / "evil.txt").exists()
+
+
+def _publish(origin: Path, src: Path, key: Path, *, version: str) -> None:
+    """Drive the real `publish` command to lay a signed bundle into `origin`."""
+    result = runner.invoke(
+        app,
+        [
+            "publish",
+            "--src",
+            str(src),
+            "--origin-dir",
+            str(origin),
+            "--key",
+            str(key),
+            "--bundle-id",
+            "catalog",
+            "--version",
+            version,
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+
+def _sync(origin: Path, cache: Path, pubkey: Path) -> None:
+    """Drive the real `sync` command to pull `origin` into `cache`."""
+    result = runner.invoke(
+        app,
+        ["sync", "--base-url", str(origin), "--cache-dir", str(cache), "--key", str(pubkey)],
+    )
+    assert result.exit_code == 0, result.output
+
+
+def test_gc_command_reclaims_superseded_chunks(tmp_path: Path) -> None:
+    """`edgeproc gc` is the operator entry point docs/OPERATIONS.md tells operators to run.
+
+    Drives the REAL CLI end to end — keygen, publish v1, sync, publish v2, sync, gc — so
+    the command is proven reachable, not merely that `FilesystemCacheStore.gc()` exists.
+    """
+    # Given: a cache synced through two bundle versions, so v1's chunks are now unreferenced
+    keys, src, origin, cache = (tmp_path / n for n in ("keys", "src", "origin", "cache"))
+    src.mkdir()
+    assert runner.invoke(app, ["keygen", "--out", str(keys)]).exit_code == 0
+    (src / "catalog.txt").write_bytes(b"version one payload " * 512)
+    _publish(origin, src, keys / "private.key", version="1.0.0")
+    _sync(origin, cache, keys / "public.key")
+    (src / "catalog.txt").write_bytes(b"version two payload " * 512)
+    _publish(origin, src, keys / "private.key", version="2.0.0")
+    _sync(origin, cache, keys / "public.key")
+
+    # When
+    result = runner.invoke(app, ["gc", "--cache-dir", str(cache)])
+
+    # Then: it reports what it reclaimed, and the active bundle is still intact
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["removed"] > 0
+    out = tmp_path / "out"
+    verify = runner.invoke(
+        app,
+        [
+            "sync",
+            "--base-url",
+            str(origin),
+            "--cache-dir",
+            str(cache),
+            "--key",
+            str(keys / "public.key"),
+            "--materialize-to",
+            str(out),
+        ],
+    )
+    assert verify.exit_code == 0, verify.output
+    assert (out / "catalog.txt").read_bytes() == b"version two payload " * 512
+
+
+def test_gc_on_a_store_with_no_active_pointer_is_a_safe_no_op(tmp_path: Path) -> None:
+    """Fail-safe: GC must never wipe a store that has nothing promoted."""
+    result = runner.invoke(app, ["gc", "--cache-dir", str(tmp_path / "empty")])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["removed"] == 0
+
+
+def test_gc_fails_closed_with_a_canonical_code_on_a_corrupt_store(tmp_path: Path) -> None:
+    """A GC that hits a corrupt object must exit 1 with the canonical code, not a traceback."""
+    # Given: a synced cache whose stored manifest has been tampered with
+    keys, src, origin, cache = (tmp_path / n for n in ("keys", "src", "origin", "cache"))
+    src.mkdir()
+    assert runner.invoke(app, ["keygen", "--out", str(keys)]).exit_code == 0
+    (src / "catalog.txt").write_bytes(b"payload " * 256)
+    _publish(origin, src, keys / "private.key", version="1.0.0")
+    _sync(origin, cache, keys / "public.key")
+    manifests = sorted((cache / "manifests").iterdir())
+    assert manifests, "sync should have stored a manifest"
+    manifests[0].write_bytes(b'{"bundle_id":"tampered","version":"9.9.9","files":[],"metadata":{}}')
+
+    # When
+    result = runner.invoke(app, ["gc", "--cache-dir", str(cache)])
+
+    # Then
+    assert result.exit_code == 1
+    assert "Traceback" not in result.stderr
+    assert "[bundle.integrity_failed]" in result.stderr
+    assert "gc failed" in result.stderr
+
+
+def test_gc_pretty_prints_a_human_summary(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["gc", "--cache-dir", str(tmp_path / "store"), "--pretty"])
+    assert result.exit_code == 0, result.output
+    assert "reclaimed 0 objects" in result.stdout

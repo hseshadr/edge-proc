@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import importlib.metadata
+import re
+from pathlib import Path
 
 import edgeproc
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_top_level_exports_the_core_surface() -> None:
@@ -44,10 +48,20 @@ def test_version_matches_installed_package_metadata() -> None:
     assert edgeproc.__version__ == importlib.metadata.version("edge-proc")
 
 
+def test_citation_version_matches_the_installed_package() -> None:
+    # Regression: CITATION.cff sat at 0.1.1 while the package shipped 0.1.5 — three
+    # releases stale. A citation naming a version that was never released is a WRONG
+    # citation, so the metadata file is part of the same version-drift contract.
+    citation = (ROOT / "CITATION.cff").read_text(encoding="utf-8")
+    declared = re.search(r"^version:\s*(.+)$", citation, re.MULTILINE)
+    assert declared is not None, "CITATION.cff declares no version"
+    assert declared.group(1).strip().strip("\"'") == importlib.metadata.version("edge-proc")
+
+
 async def test_result_envelope_stamps_the_installed_version() -> None:
     # Provenance is the audit trail — every envelope must carry the real
     # released version, not a stale literal.
-    envelope = await edgeproc.EdgeProc.local_default().run(
+    envelope = await edgeproc.EdgeProc(edgeproc.RuntimeRegistry()).run(
         edgeproc.Task(
             kind=edgeproc.TaskKind.DETERMINISTIC,
             payload={},

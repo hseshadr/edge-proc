@@ -155,6 +155,34 @@ def test_promote_refuses_equal_sequence_for_different_pointer(tmp_path: Path) ->
     assert store.read_active() == active
 
 
+@pytest.mark.parametrize(("incoming", "active"), [(5, 3), (3, 5), (None, 3), (5, None)])
+def test_promote_agrees_with_the_public_freshness_predicate(
+    tmp_path: Path, incoming: int | None, active: int | None
+) -> None:
+    """``promote`` and ``is_fresh_sequence`` are ONE rule, so they can never disagree.
+
+    Guards the consolidation: ``_sequence_violation`` delegates its counter comparison to
+    the public predicate. If someone reintroduces a private near-duplicate that drifts,
+    a non-fresh pointer that still promotes (or vice versa) fails here.
+
+    Equal counters are excluded because promotion deliberately adds idempotence on top of
+    strict freshness — that divergence is asserted by the two tests directly above.
+    """
+    store = FilesystemCacheStore(tmp_path)
+    active_pointer = _make_pointer(store, b"active", version="1.0.0", sequence=active)
+    incoming_pointer = _make_pointer(store, b"incoming", version="1.0.0", sequence=incoming)
+    store.promote(active_pointer)
+
+    fresh = is_fresh_sequence(incoming_pointer, active_pointer)
+    if fresh:
+        store.promote(incoming_pointer)
+        assert store.read_active() == incoming_pointer
+    else:
+        with pytest.raises(RollbackError):
+            store.promote(incoming_pointer)
+        assert store.read_active() == active_pointer
+
+
 def _make_pointer(
     store: FilesystemCacheStore, payload: bytes, *, version: str, sequence: int
 ) -> VersionPointer:

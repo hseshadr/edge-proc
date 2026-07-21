@@ -10,10 +10,13 @@ from edgeproc.core.memory import MemoryBudgetExceededError, MemoryManager
 def test_reservation_releases_declared_bytes_after_scope() -> None:
     manager = MemoryManager(max_bytes=10)
 
-    with manager.reserve(6):
-        assert manager.reserved_bytes == 6
+    # The bytes are really held: the remaining 4 cannot absorb another 5.
+    with manager.reserve(6), pytest.raises(MemoryBudgetExceededError):
+        manager.reserve(5)
 
-    assert manager.reserved_bytes == 0
+    # Released on exit: the FULL capacity is admissible again.
+    with manager.reserve(10):
+        pass
 
 
 def test_reservation_rejects_when_capacity_would_be_exceeded() -> None:
@@ -36,7 +39,9 @@ def test_reservation_releases_bytes_when_work_raises() -> None:
     with pytest.raises(RuntimeError, match="boom"), manager.reserve(6):
         raise RuntimeError("boom")
 
-    assert manager.reserved_bytes == 0
+    # Released even on the exception path: the full capacity is admissible again.
+    with manager.reserve(10):
+        pass
 
 
 def test_reservation_rejects_non_positive_bytes() -> None:

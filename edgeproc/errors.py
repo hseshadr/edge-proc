@@ -25,7 +25,28 @@ from shared_libs_python.errors import (
     starter_pack,
 )
 
-#: Canonical codes edge-proc surfaces, named for greppable reuse at throw-sites.
+# This module is edge-proc's seam over the shared catalog: callers import the code
+# constants AND the types they are annotated with from here, never reaching through to
+# ``shared_libs_python.errors`` themselves. Re-exporting the two types explicitly is what
+# makes that a supported import rather than an accident of implementation.
+__all__ = [
+    "BUNDLE_DOWNLOAD_FAILED",
+    "BUNDLE_INTEGRITY_FAILED",
+    "CONFIG_INVALID",
+    "CONFIG_MISSING",
+    "INTERNAL_UNKNOWN",
+    "ErrorCode",
+    "ProblemDetails",
+    "code_of",
+    "problem_details_for",
+    "registry",
+]
+
+#: Canonical codes edge-proc surfaces, each attached at a real throw site.
+#: ``bundle.integrity_failed`` rides on IntegrityError (CAS) and SignatureError (signing);
+#: ``bundle.download_failed`` on ResponseTooLargeError (adapters); ``config.missing`` and
+#: ``config.invalid`` are stamped onto the CLI's fail-closed config refusals;
+#: ``internal.unknown`` is the fallback ``code_of`` returns for an uncoded error.
 BUNDLE_INTEGRITY_FAILED: ErrorCode = "bundle.integrity_failed"
 BUNDLE_DOWNLOAD_FAILED: ErrorCode = "bundle.download_failed"
 CONFIG_MISSING: ErrorCode = "config.missing"

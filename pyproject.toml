@@ -64,10 +64,15 @@ Issues = "https://github.com/hseshadr/edge-proc/issues"
 
 [tool.uv.sources]
 # Open-source onboarding: clone ONLY this repo and `uv sync` — shared-libs-python
-# is pulled from public GitHub (it is not on PyPI). Pinned to the v0.2.0 release
-# tag, which ships the canonical-errors module (shared_libs_python.errors); an
-# immutable tag keeps external clones + CI reproducible.
-shared-libs-python = { git = "https://github.com/hseshadr/shared-libs-python.git", tag = "v0.2.0" }
+# is pulled from public GitHub (it is not on PyPI).
+#
+# Pinned by full commit SHA, not by tag. A git TAG is mutable: whoever can push to
+# that repo can retarget `v0.2.0` at different code, and every clone would silently
+# resolve a dependency nobody reviewed. The SHA below is immutable and is the commit
+# `v0.2.0` pointed at when it was pinned (`git ls-remote ... refs/tags/v0.2.0^{}`) —
+# the release that ships the canonical-errors module (shared_libs_python.errors).
+# Re-resolve and update this line deliberately when moving to a new release.
+shared-libs-python = { git = "https://github.com/hseshadr/shared-libs-python.git", rev = "ed1c3f6414710cb27d1c01e5fc2d6cadf0214b25" }
 
 # Co-developing shared-libs-python locally? Clone it next to this repo and swap the
 # line above for a path source (uncomment):

@@ -390,10 +390,14 @@ uv run poe gate
 uv run python benchmarks/benchmark.py
 ```
 
-The gate is 259 tests at 98.73% coverage. On one developer laptop the benchmark reports 0.09 ms
-search p95, 55 ms cold-sync p95, 18 ms warm-sync p95, and 114 MiB peak RSS against a 512 MiB
-admission budget. Those are one machine's numbers on a synthetic fixture — treat them as a
-shape, not a guarantee.
+Both commands check themselves. The benchmark runs a fixed, offline fixture and prints JSON
+with the latency it measured, peak memory, the machine it ran on, and pass/fail against each
+budget — so you get *your* numbers rather than having to trust someone else's.
+
+The figures measured here, and the hardware they were measured on, are recorded in
+[**docs/OPERATIONS.md**](docs/OPERATIONS.md#measured-evidence). That is the one place they
+live: this README deliberately does not restate them, because a number copied into two
+documents is a number that will eventually disagree with itself.
 
 ## Status & roadmap
 

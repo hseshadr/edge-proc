@@ -17,7 +17,7 @@ same Protocols — a future implementer slots in with zero consumer change.
 from __future__ import annotations
 
 import base64
-from typing import Protocol, runtime_checkable
+from typing import ClassVar, Protocol, runtime_checkable
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -25,9 +25,19 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PublicKey,
 )
 
+from edgeproc.errors import BUNDLE_INTEGRITY_FAILED
+
 
 class SignatureError(Exception):
-    """Raised when a signature is absent, malformed, or does not verify."""
+    """Raised when a signature is absent, malformed, or does not verify.
+
+    Carries the canonical ``bundle.integrity_failed`` code: a signature that does not
+    verify is the same trust-boundary refusal as a failed content-address check, and an
+    operator should see one code for "this bundle could not be trusted". Metadata only —
+    the type and message every existing handler depends on are unchanged.
+    """
+
+    code: ClassVar[str] = BUNDLE_INTEGRITY_FAILED
 
 
 # FUTURE: a Sigstore keyless verifier slots in behind these same Protocols (roadmap)

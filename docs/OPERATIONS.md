@@ -68,8 +68,10 @@ responsibility.
   atomically repoint their own symlink/directory reference.
 - **Recovery:** retry sync after transport or lock failure. If the active manifest/chunks
   fail integrity, quarantine the cache, recreate it, and sync from a trusted origin/key.
-  Run GC only through `FilesystemCacheStore.gc()`; it is serialized and is a no-op without
-  an active pointer.
+  Reclaim disk with `edgeproc gc --cache-dir <cache>` (or `FilesystemCacheStore.gc()` when
+  embedding the library). Either path takes the store's mutation lock, so GC is serialized
+  against a concurrent sync rather than racing it, and a store with nothing promoted is
+  left untouched — a no-op, never a wipe. Never delete objects out of a cache by hand.
 
 EdgeProc has no independent uptime SLA because it is an embedded library. The host owns
 origin redundancy, retry policy, alerting, disk monitoring, model warm-up, process
@@ -97,10 +99,33 @@ These numbers cover library-owned FAISS lookup and signed filesystem sync withou
 variance. They deliberately exclude model download/encoding and CDN latency, which depend
 on the consumer's model, hardware, and origin and must be measured in the embedding app.
 
-Fresh local evidence on 2026-07-15 (macOS 26.5 arm64, CPython 3.13.5): search
-p50 0.063 ms / p95 0.077 ms; cold sync p50 58.1 ms / p95 111.0 ms; warm sync
-p50 18.6 ms / p95 19.8 ms; maximum RSS 114.5 MiB. These measurements describe that
-exact tree and machine, not a promise for every consumer.
+### Measured evidence
+
+**This table is the single source for EdgeProc's performance figures.** They are stated
+here and nowhere else — no other document restates them, so there is nothing to drift.
+
+Measured 2026-07-20 on a clean build (`rm -rf .venv && uv sync --all-extras`), macOS 26.5
+arm64 (Apple silicon laptop), CPython 3.13.5, commit at the time of measurement:
+
+| metric | p50 | p95 | gate budget |
+|---|---|---|---|
+| vector search | 0.075 ms | 0.097 ms | 100.0 ms |
+| cold sync | 54.181 ms | 82.444 ms | 750.0 ms |
+| warm sync | 16.016 ms | 16.464 ms | 250.0 ms |
+
+Peak process RSS was 114.0 MiB against the 512 MiB budget.
+
+Read the p95 column as a shape, not a constant. Cold sync is the noisiest metric: two
+consecutive runs on this same machine reported 52.6 ms and 82.4 ms, because seven cold
+syncs give the 95th percentile very few samples and each one is dominated by filesystem
+behavior the library does not control. The table records the slower run deliberately —
+an optimistic number is the more dangerous error. This is also why the drift test in
+`tests/test_release_contract_docs.py` compares these committed figures against the
+committed budgets rather than against a benchmark run at test time: a test that raced a
+live measurement against a documented one would fail on machine variance, not on defects.
+
+These measurements describe that exact tree and machine. They are not a promise for
+every consumer, and the budgets above — not these figures — are what the gate enforces.
 
 ## Release evidence
 

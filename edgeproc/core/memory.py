@@ -46,12 +46,6 @@ class MemoryManager:
         """The maximum sum of active declared reservations."""
         return self._capacity
 
-    @property
-    def reserved_bytes(self) -> int:
-        """The current sum of active declared reservations."""
-        with self._lock:
-            return self._reserved
-
     def reserve(self, requested_bytes: int) -> AbstractContextManager[None]:
         """Admit a positive reservation and return its releasing context manager."""
         if requested_bytes <= 0:

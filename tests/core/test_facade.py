@@ -108,7 +108,7 @@ async def test_refuses_task_when_declared_memory_exceeds_capacity() -> None:
     assert result.success is False
     assert result.error == "memory_budget_exceeded"
     assert runtime.calls == 0
-    assert ep.memory_manager.reserved_bytes == 0
+    _assert_nothing_held(ep.memory_manager)
 
 
 async def test_returns_typed_failure_for_an_unvalidated_non_positive_memory_budget() -> None:
@@ -122,11 +122,10 @@ async def test_returns_typed_failure_for_an_unvalidated_non_positive_memory_budg
     assert result.success is False
     assert result.error == "invalid_memory_budget"
     assert runtime.calls == 0
-    assert ep.memory_manager.reserved_bytes == 0
+    _assert_nothing_held(ep.memory_manager)
 
 
-async def test_local_default_builds_a_usable_instance() -> None:
-    ep = EdgeProc.local_default()
-    # No runtimes are guaranteed installed in v0-core, so a bare task fails closed.
-    result = await ep.run(_task())
-    assert isinstance(result, ResultEnvelope)
+def _assert_nothing_held(manager: MemoryManager) -> None:
+    """A refused task must leak no reservation: the FULL capacity is still admissible."""
+    with manager.reserve(manager.capacity_bytes):
+        pass

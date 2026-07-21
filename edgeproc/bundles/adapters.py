@@ -9,19 +9,24 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import TracebackType
-from typing import Protocol, runtime_checkable
+from typing import ClassVar, Protocol, runtime_checkable
 
 import httpx
 
 from edgeproc.core.settings import EdgeProcSettings
+from edgeproc.errors import BUNDLE_DOWNLOAD_FAILED
 
 
 class ResponseTooLargeError(httpx.HTTPError):
     """An origin returned a body larger than the configured cap (fail-closed).
 
     Subclasses ``httpx.HTTPError`` so every existing fetch-failure handler already
-    catches it — an oversized body is just another way the fetch failed.
+    catches it — an oversized body is just another way the fetch failed. Carries the
+    canonical ``bundle.download_failed`` code so the CLI (and any consumer) can render
+    it via :func:`edgeproc.errors.problem_details_for`; the code is metadata only.
     """
+
+    code: ClassVar[str] = BUNDLE_DOWNLOAD_FAILED
 
 
 @runtime_checkable

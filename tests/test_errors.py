@@ -8,8 +8,12 @@ WITHOUT changing the exception type or message any existing caller depends on.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from edgeproc import errors
+from edgeproc.bundles.adapters import ResponseTooLargeError
 from edgeproc.bundles.cas import IntegrityError, RollbackError
+from edgeproc.bundles.signing import SignatureError
 
 _INTEGRITY_EN = "A downloaded file failed its integrity check. Retry to re-fetch it."
 
@@ -63,3 +67,39 @@ def test_unknown_error_falls_back_to_internal_unknown() -> None:
     problem = errors.problem_details_for(ValueError("something else"))
     assert problem.type == "internal.unknown"
     assert problem.detail == "something else"
+
+
+def test_every_declared_code_is_attached_at_a_real_throw_site() -> None:
+    """Anti-vacuity: a code named "for greppable reuse at throw-sites" must have one.
+
+    Regression: three of the five codes were declared but never attached to anything
+    raised, so the catalog advertised coverage the product did not have. Each code must
+    be referenced from shipped code OUTSIDE its own declaration in ``errors.py``.
+    """
+    root = Path(__file__).resolve().parents[1] / "edgeproc"
+    sources = {
+        path: path.read_text(encoding="utf-8")
+        for path in root.rglob("*.py")
+        if path.name != "errors.py"
+    }
+    unattached = [
+        name
+        for name in (
+            "BUNDLE_INTEGRITY_FAILED",
+            "BUNDLE_DOWNLOAD_FAILED",
+            "CONFIG_MISSING",
+            "CONFIG_INVALID",
+            "INTERNAL_UNKNOWN",
+        )
+        if not any(name in text for text in sources.values())
+    ]
+    assert unattached == [], f"declared but never used at a throw site: {unattached}"
+
+
+def test_download_failure_carries_the_download_code() -> None:
+    assert ResponseTooLargeError.code == errors.BUNDLE_DOWNLOAD_FAILED
+    assert errors.code_of(ResponseTooLargeError("too big")) == "bundle.download_failed"
+
+
+def test_signature_failure_carries_the_integrity_code() -> None:
+    assert errors.code_of(SignatureError("bad signature")) == "bundle.integrity_failed"

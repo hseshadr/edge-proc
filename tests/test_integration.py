@@ -1,5 +1,5 @@
 """End-to-end proof: the extracted substrate runs through the facade, and the FAISS
-index drops into shared-libs' IndexManager — lego stacking on lego."""
+index drops into shared-libs' IndexManager without an adapter in between."""
 
 from __future__ import annotations
 

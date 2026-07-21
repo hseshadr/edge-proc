@@ -1,8 +1,11 @@
 """The one import surface a consumer uses: build an EdgeProc, hand it a Task.
 
-v0 ``local_default()`` returns an instance with an empty registry — consumers
-register a runtime explicitly (e.g. ``EdgeProc(registry)`` with a configured
-``LocalVecRuntime``). Auto-probing installed kernels is roadmap.
+Construct it with an explicit registry — ``EdgeProc(RuntimeRegistry())`` for the
+deterministic core, or a registry holding a configured runtime (e.g.
+``LocalVecRuntime``). There is deliberately no zero-argument convenience default:
+an EdgeProc with an empty registry refuses every task, so a "default" constructor
+would advertise a working object that cannot do any work. Auto-probing installed
+kernels is roadmap.
 """
 
 from __future__ import annotations
@@ -38,11 +41,6 @@ class EdgeProc:
     def memory_manager(self) -> MemoryManager:
         """The admission controller; share it across facades to share one capacity."""
         return self._memory_manager
-
-    @classmethod
-    def local_default(cls) -> EdgeProc:
-        """Pure-deterministic router + null sink + empty registry."""
-        return cls(registry=RuntimeRegistry())
 
     async def run(self, task: Task) -> ResultEnvelope:
         runtime = self._router.pick(task, self._registry.runtimes)

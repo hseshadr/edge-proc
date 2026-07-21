@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from edgeproc.core.settings import DEFAULT_MODEL, EdgeProcSettings
@@ -74,3 +76,19 @@ def test_ignores_host_app_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = EdgeProcSettings(_env_file=None)
 
     assert settings.model_name == DEFAULT_MODEL
+
+
+def test_env_example_documents_every_settings_field() -> None:
+    """``.env.example`` is the operator's map of the config surface — it must be complete.
+
+    Regression: it listed 3 of 15 fields, so most tunables (including the fail-closed
+    resource ceilings) were invisible to anyone configuring a deployment. Commented-out
+    lines count as documented; the point is that no field is silently absent.
+    """
+    example = (Path(__file__).resolve().parents[2] / ".env.example").read_text(encoding="utf-8")
+    missing = [
+        name
+        for name, field in EdgeProcSettings.model_fields.items()
+        if (field.validation_alias or f"EDGEPROC_{name}".upper()) not in example
+    ]
+    assert missing == [], f".env.example does not mention: {missing}"

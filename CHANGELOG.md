@@ -4,6 +4,52 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
 
 ## [Unreleased]
 
+### Added
+- **`edgeproc gc` command.** The runbook told operators to reclaim disk through
+  `FilesystemCacheStore.gc()`, but no CLI entry point existed — an operation documented
+  with no way to run it. `edgeproc gc --cache-dir <cache>` sweeps every chunk and manifest
+  the active pointer does not reference, behind the store's mutation lock, and is a
+  no-op on a store with nothing promoted.
+- **Canonical codes on every operator-facing failure.** `SignatureError` and
+  `ResponseTooLargeError` now carry `bundle.integrity_failed` / `bundle.download_failed`,
+  and the CLI stamps its fail-closed config refusals with `config.missing` /
+  `config.invalid`. A test now fails if a declared code has no throw site.
+- **Performance-claim drift guard.** A test compares the committed evidence table in
+  `docs/OPERATIONS.md` against the committed budgets in `benchmarks/benchmark.py` —
+  never against a benchmark run at test time, so it cannot flake on machine variance.
+
+### Changed
+- **One implementation of sequence freshness.** `cas._sequence_violation` delegates its
+  counter comparison to the public `is_fresh_sequence` predicate instead of keeping a
+  private near-duplicate, so the two can no longer drift apart. Behavior is unchanged,
+  including the idempotent same-sequence re-promote.
+- **Performance figures have one home.** The README restated a cold-sync p95 of 55 ms
+  that was actually that run's p50, while `docs/OPERATIONS.md` said 111.0 ms. Measured
+  figures now live only in `docs/OPERATIONS.md`, with the hardware stated; the README
+  links to them.
+- **The shared error dependency is pinned by commit SHA, not tag.** A git tag is mutable,
+  so a moved `v0.2.0` would have silently changed the dependency for every clone. Pinned
+  to `ed1c3f6414710cb27d1c01e5fc2d6cadf0214b25`, the commit that tag pointed at.
+- **The workflow-pinning audit scans `*.yaml` as well as `*.yml`** and asserts a non-zero
+  action count, so a renamed workflow can no longer make the check pass vacuously.
+- **`.env.example` documents the whole config surface.** It listed 3 of 15 settings
+  fields; a test now fails if any field is undocumented.
+- **`CITATION.cff` version tracked into the drift test.** It had sat at `0.1.1` through
+  three releases; the existing version-drift test now covers it.
+
+### Removed
+- **`EdgeProc.local_default()`** — a zero-argument constructor whose empty registry
+  refused every task, advertising a working default that could not work. Construct
+  `EdgeProc(RuntimeRegistry())` explicitly.
+- **`MemoryManager.reserved_bytes`** — a counter no production code read;
+  `MemoryBudgetExceededError` already reports available and total capacity at the only
+  moment the number matters.
+
+### Notes
+- **A `v0.1.5` tag is deliberately HELD.** `publish.yml` triggers on `v*`, and edge-proc's
+  PyPI publish must stay blocked until `shared-libs-python` (a `Requires-Dist`) is itself
+  on PyPI. Tagging is a separate, sequenced decision — not a step in finishing this work.
+
 ## [0.1.5] — 2026-07-20
 
 ### Added
