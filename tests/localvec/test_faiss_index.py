@@ -5,7 +5,10 @@ Vectors are dim-4 and axis-aligned so inner-product ranking is hand-verifiable.
 
 from __future__ import annotations
 
+import asyncio
+import json
 from pathlib import Path
+from threading import Event
 
 import pytest
 from edgeproc_core.vector_mgmt.core.types import (
@@ -163,6 +166,66 @@ async def test_rebuild_with_config_keeps_dimension_but_updates_other_knobs() -> 
     assert idx.config.dimension == 4  # dimension is pinned to the stored vectors
     assert idx.config.ef_search == 42  # other knobs are adopted
     assert {doc for doc, _ in await idx.search([1.0, 0.0, 0.0, 0.0], k=1)} == {"a"}
+
+
+async def test_rebuild_serializes_insert_and_search_on_real_faiss() -> None:
+    idx = _index()
+    await idx.insert([_emb("base", [1.0, 0.0, 0.0, 0.0])])
+    rebuild_entered = Event()
+    release_rebuild = Event()
+    original_reindex = idx._reindex_survivors
+
+    def paused_reindex(survivors: list[tuple[str, object]]) -> None:
+        rebuild_entered.set()
+        assert release_rebuild.wait(timeout=5)
+        original_reindex(survivors)  # type: ignore[arg-type]
+
+    idx._reindex_survivors = paused_reindex  # type: ignore[method-assign]
+    rebuild_task = asyncio.create_task(idx.rebuild())
+    assert await asyncio.to_thread(rebuild_entered.wait, 5)
+    insert_task = asyncio.create_task(idx.insert([_emb("new", [0.0, 1.0, 0.0, 0.0])]))
+    search_task = asyncio.create_task(idx.search([1.0, 0.0, 0.0, 0.0], k=5))
+    await asyncio.sleep(0.05)
+    assert not insert_task.done()
+    assert not search_task.done()
+    release_rebuild.set()
+    await asyncio.gather(rebuild_task, insert_task)
+    results = await search_task
+    assert {doc for doc, _ in results} == {"base", "new"}
+    assert (await idx.get_stats()).tombstone_count == 0
+
+
+async def test_save_serializes_with_rebuild_and_load_rejects_crash_mismatch(
+    tmp_path: Path,
+) -> None:
+    idx = _index()
+    await idx.insert([_emb("base", [1.0, 0.0, 0.0, 0.0])])
+    rebuild_entered = Event()
+    release_rebuild = Event()
+    original_reindex = idx._reindex_survivors
+
+    def paused_reindex(survivors: list[tuple[str, object]]) -> None:
+        rebuild_entered.set()
+        assert release_rebuild.wait(timeout=5)
+        original_reindex(survivors)  # type: ignore[arg-type]
+
+    idx._reindex_survivors = paused_reindex  # type: ignore[method-assign]
+    rebuild_task = asyncio.create_task(idx.rebuild())
+    assert await asyncio.to_thread(rebuild_entered.wait, 5)
+    save_task = asyncio.create_task(asyncio.to_thread(idx.save, tmp_path / "vec"))
+    await asyncio.sleep(0.05)
+    assert not save_task.done()
+    release_rebuild.set()
+    await asyncio.gather(rebuild_task, save_task)
+    loaded = FaissVectorIndex.load("products", tmp_path / "vec")
+    assert (await loaded.get_stats()).vector_count == 1
+
+    state_path = tmp_path / "vec" / "state.json"
+    state = json.loads(state_path.read_text())
+    state["faiss_ids"] = []
+    state_path.write_text(json.dumps(state))
+    with pytest.raises(ValueError, match="row count"):
+        FaissVectorIndex.load("products", tmp_path / "vec")
 
 
 async def test_insert_duplicate_id_fails_closed() -> None:

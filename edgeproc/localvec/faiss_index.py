@@ -15,7 +15,10 @@ strategies.
 from __future__ import annotations
 
 import asyncio
+import os
+from contextlib import AbstractContextManager
 from pathlib import Path
+from threading import RLock
 from typing import Final
 
 import faiss
@@ -34,6 +37,10 @@ from pydantic import BaseModel
 # load() can find a save()d index across versions. Renaming either breaks existing dirs.
 _INDEX_FILE: Final[str] = "index.faiss"
 _STATE_FILE: Final[str] = "state.json"
+_INDEX_TEMP: Final[str] = ".index.faiss.tmp"
+_STATE_TEMP: Final[str] = ".state.json.tmp"
+_PERSISTENCE_LOCKS: dict[Path, AbstractContextManager[object]] = {}
+_PERSISTENCE_LOCKS_GUARD = RLock()
 
 
 class _PersistedState(BaseModel):
@@ -57,26 +64,33 @@ class FaissVectorIndex:
         self._row_of: dict[str, int] = {}  # entity_id -> its CURRENT authoritative FAISS row
         self._meta: dict[str, Metadata] = {}
         self._tombstoned: set[str] = set()
+        self._lock = RLock()
 
     def save(self, directory: Path) -> None:
         """Persist the FAISS index plus its id map, tombstones, and metadata."""
-        directory.mkdir(parents=True, exist_ok=True)
-        faiss.write_index(self._faiss, str(directory / _INDEX_FILE))
-        state = _PersistedState(
+        with self._lock, _persistence_lock(directory):
+            directory.mkdir(parents=True, exist_ok=True)
+            state = self._persisted_state()
+            _write_atomic_pair(directory, self._faiss, state)
+
+    def _persisted_state(self) -> _PersistedState:
+        return _PersistedState(
             config=self.config,
             faiss_ids=self._faiss_ids,
             tombstoned=sorted(self._tombstoned),
             meta={entity_id: dict(meta) for entity_id, meta in self._meta.items()},
         )
-        (directory / _STATE_FILE).write_text(state.model_dump_json())
 
     @classmethod
     def load(cls, index_name: str, directory: Path) -> FaissVectorIndex:
         """Reload an index previously written by :meth:`save`."""
-        state = _PersistedState.model_validate_json((directory / _STATE_FILE).read_text())
-        instance = cls(index_name, state.config)
-        instance._restore(faiss.read_index(str(directory / _INDEX_FILE)), state)
-        return instance
+        with _persistence_lock(directory):
+            state = _PersistedState.model_validate_json((directory / _STATE_FILE).read_text())
+            faiss_index = faiss.read_index(str(directory / _INDEX_FILE))
+            _validate_persisted_index(faiss_index, state)
+            instance = cls(index_name, state.config)
+            instance._restore(faiss_index, state)
+            return instance
 
     def _restore(self, faiss_index: faiss.Index, state: _PersistedState) -> None:
         self._faiss = faiss_index
@@ -112,26 +126,28 @@ class FaissVectorIndex:
         return await asyncio.to_thread(self._search_sync, query_vector, k, filters)
 
     async def delete(self, entity_ids: list[str]) -> None:
-        for entity_id in entity_ids:
-            if entity_id in self._live:
-                del self._live[entity_id]
-                del self._meta[entity_id]
-                del self._row_of[entity_id]
-                self._tombstoned.add(entity_id)
+        with self._lock:
+            for entity_id in entity_ids:
+                if entity_id in self._live:
+                    del self._live[entity_id]
+                    del self._meta[entity_id]
+                    del self._row_of[entity_id]
+                    self._tombstoned.add(entity_id)
 
     async def get_stats(self) -> IndexStats:
-        live = len(self._live)
-        # Count EVERY dead physical row — deleted ids AND rows superseded by a re-insert —
-        # so the tombstone ratio that triggers rebuilds reflects the index's real bloat.
-        dead = int(self._faiss.ntotal) - live
-        total = live + dead
-        return IndexStats(
-            index_name=self.index_name,
-            vector_count=live,
-            index_size_mb=live * self.config.dimension * 4 / (1024 * 1024),
-            tombstone_count=dead,
-            tombstone_percentage=(dead / total * 100.0) if total else 0.0,
-        )
+        with self._lock:
+            live = len(self._live)
+            # Count EVERY dead physical row — deleted ids AND rows superseded by a re-insert —
+            # so the tombstone ratio that triggers rebuilds reflects the index's real bloat.
+            dead = int(self._faiss.ntotal) - live
+            total = live + dead
+            return IndexStats(
+                index_name=self.index_name,
+                vector_count=live,
+                index_size_mb=live * self.config.dimension * 4 / (1024 * 1024),
+                tombstone_count=dead,
+                tombstone_percentage=(dead / total * 100.0) if total else 0.0,
+            )
 
     async def rebuild(self, config: IndexConfig | None = None) -> None:
         await asyncio.to_thread(self._rebuild_sync, config)
@@ -139,8 +155,9 @@ class FaissVectorIndex:
     # -- sync internals (run inside asyncio.to_thread) -----------------------------
 
     def _insert_sync(self, embeddings: list[VectorEmbedding]) -> None:
-        for embedding in embeddings:
-            self._add_one(embedding)
+        with self._lock:
+            for embedding in embeddings:
+                self._add_one(embedding)
 
     def _add_one(self, embedding: VectorEmbedding) -> None:
         self._validate_new(embedding)
@@ -165,15 +182,16 @@ class FaissVectorIndex:
     def _search_sync(
         self, query_vector: list[float], k: int, filters: Metadata | None
     ) -> list[tuple[str, float]]:
-        if self._faiss.ntotal == 0 or k <= 0:
-            return []
-        query = _as_vector(query_vector).reshape(1, -1)
-        # Over-fetch past every dead physical row (deleted + superseded) so we can still
-        # surface k live hits after filtering; underestimating this drops real results.
-        dead_rows = int(self._faiss.ntotal) - len(self._live)
-        fetch = min(self._faiss.ntotal, k + dead_rows)
-        scores, indices = self._faiss.search(query, fetch)
-        return self._collect(scores[0], indices[0], k, filters)
+        with self._lock:
+            if self._faiss.ntotal == 0 or k <= 0:
+                return []
+            query = _as_vector(query_vector).reshape(1, -1)
+            # Over-fetch past every dead physical row (deleted + superseded) so we can still
+            # surface k live hits after filtering; underestimating this drops real results.
+            dead_rows = int(self._faiss.ntotal) - len(self._live)
+            fetch = min(self._faiss.ntotal, k + dead_rows)
+            scores, indices = self._faiss.search(query, fetch)
+            return self._collect(scores[0], indices[0], k, filters)
 
     def _collect(
         self,
@@ -207,12 +225,13 @@ class FaissVectorIndex:
         return entity_id
 
     def _rebuild_sync(self, config: IndexConfig | None) -> None:
-        if config is not None:
-            self.config = config.model_copy(update={"dimension": self.config.dimension})
-        survivors = list(self._live.items())
-        self._faiss = faiss.IndexFlatIP(self.config.dimension)
-        self._reindex_survivors(survivors)
-        self._tombstoned.clear()
+        with self._lock:
+            if config is not None:
+                self.config = config.model_copy(update={"dimension": self.config.dimension})
+            survivors = list(self._live.items())
+            self._faiss = faiss.IndexFlatIP(self.config.dimension)
+            self._reindex_survivors(survivors)
+            self._tombstoned.clear()
 
     def _reindex_survivors(self, survivors: list[tuple[str, NDArray[np.float32]]]) -> None:
         """Repopulate the FAISS index + id/row maps from the compacted survivor set."""
@@ -230,3 +249,43 @@ def _passes(meta: Metadata, filters: Metadata | None) -> bool:
     if not filters:
         return True
     return all(meta.get(key) == value for key, value in filters.items())
+
+
+def _persistence_lock(directory: Path) -> AbstractContextManager[object]:
+    key = directory.resolve()
+    with _PERSISTENCE_LOCKS_GUARD:
+        lock = _PERSISTENCE_LOCKS.get(key)
+        if lock is None:
+            lock = RLock()
+            _PERSISTENCE_LOCKS[key] = lock
+        return lock
+
+
+def _write_atomic_pair(directory: Path, index: faiss.Index, state: _PersistedState) -> None:
+    index_temp = directory / _INDEX_TEMP
+    state_temp = directory / _STATE_TEMP
+    try:
+        faiss.write_index(index, str(index_temp))
+        _fsync_file(index_temp)
+        state_temp.write_text(state.model_dump_json())
+        _fsync_file(state_temp)
+        os.replace(index_temp, directory / _INDEX_FILE)
+        os.replace(state_temp, directory / _STATE_FILE)
+    finally:
+        index_temp.unlink(missing_ok=True)
+        state_temp.unlink(missing_ok=True)
+
+
+def _fsync_file(path: Path) -> None:
+    with path.open("rb") as handle:
+        os.fsync(handle.fileno())
+
+
+def _validate_persisted_index(index: faiss.Index, state: _PersistedState) -> None:
+    if index.ntotal != len(state.faiss_ids):
+        raise ValueError("persisted FAISS row count does not match state sidecar")
+    if index.d != state.config.dimension:
+        raise ValueError("persisted FAISS dimension does not match state sidecar")
+    live_ids = set(state.faiss_ids) - set(state.tombstoned)
+    if set(state.meta) != live_ids:
+        raise ValueError("persisted metadata IDs do not match live state")
