@@ -24,10 +24,10 @@ EdgeProc uses [`uv`](https://docs.astral.sh/uv/) for environment and dependency 
 uv sync --all-extras
 ```
 
-`edgeproc-core` is **not on PyPI** — `pyproject.toml` pins it to a release tag from
-public GitHub via `[tool.uv.sources]`, so `uv sync` fetches it for you with no sibling
-checkout. Co-developing `edgeproc-core` alongside EdgeProc? Clone it next to this repo
-and swap the git source for the commented path source in `pyproject.toml`.
+`edgeproc-core` installs from [PyPI](https://pypi.org/project/edgeproc-core/)
+(`edgeproc-core>=0.2.1`), so `uv sync` fetches it with no sibling checkout.
+Co-developing `edgeproc-core` alongside EdgeProc? Clone it next to this repo and
+add the path override commented in `pyproject.toml`.
 
 ## Running the gate
 

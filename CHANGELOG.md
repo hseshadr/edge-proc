@@ -4,6 +4,12 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
 
 ## [Unreleased]
 
+## [0.1.5] — 2026-07-21
+
+First release published to PyPI as
+[`edge-proc`](https://pypi.org/project/edge-proc/), so `pip install edge-proc`
+(and its extras) now works directly.
+
 ### Added
 - **`edgeproc gc` command.** The runbook told operators to reclaim disk through
   `FilesystemCacheStore.gc()`, but no CLI entry point existed — an operation documented
@@ -19,6 +25,12 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
   never against a benchmark run at test time, so it cannot flake on machine variance.
 
 ### Changed
+- **`edgeproc-core` now installs from PyPI.** The `[tool.uv.sources]` git pin
+  (commit `6cdf847`) is dropped; the dependency is a plain `edgeproc-core>=0.2.1`
+  requirement resolved from PyPI, where upstream's `0.2.1` release is the first
+  to ship the `edgeproc_core` import package. README and CONTRIBUTING
+  onboarding prose follow, and the commented local path override remains for
+  co-development.
 - **Upstream dependency renamed `shared-libs-python` → `edgeproc-core`.** Imports move
   from `shared_libs_python.*` to `edgeproc_core.*`, and the dependency spec, the
   `[tool.uv.sources]` key, and the lock all follow. The upstream GitHub repository is

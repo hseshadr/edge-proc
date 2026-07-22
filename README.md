@@ -308,17 +308,14 @@ cd edge-proc
 uv sync --all-extras   # core + extras + dev tooling
 ```
 
-That Just Works — `edgeproc-core` isn't on PyPI either, so `pyproject.toml` pins it by full
-commit SHA to public GitHub (see `[tool.uv.sources]`); `uv sync` fetches it for you, nothing
-else to clone. That pin is **an untagged commit on the dependency's `main`, not a release**:
-edge-proc imports `edgeproc_core`, and no tag carries that import package yet — the newest
-tag still ships the pre-rename `shared_libs_python`, so pinning a tag would not build. A SHA
-is immutable either way, so every clone resolves the identical bytes. It gets re-pinned to a
-tag once upstream releases one containing the rename. Co-developing `edgeproc-core` alongside
-EdgeProc? Clone it next to this repo and swap the git source for the commented path source in
+That Just Works — `edgeproc-core` resolves from
+[PyPI](https://pypi.org/project/edgeproc-core/) (`edgeproc-core>=0.2.1`, the first
+release shipping the `edgeproc_core` import package), so `uv sync` fetches
+everything; nothing else to clone. Co-developing `edgeproc-core` alongside
+EdgeProc? Clone it next to this repo and add the path override commented in
 `pyproject.toml`.
 
-Once edge-proc is published to PyPI, the extras install directly:
+Or install from PyPI — the extras install directly:
 
 ```bash
 pip install edge-proc                    # core + CLI (pure router, contracts)
@@ -329,7 +326,7 @@ pip install edge-proc[localvec,bundles]  # full local substrate
 
 EdgeProc is **purely a dependency** — a library an application embeds, not a service you sign
 up for. The core is tiny; the heavy machinery (FAISS, sync) is opt-in behind extras. It builds
-on [`edgeproc-core`](https://github.com/hseshadr/shared-libs-python): the FAISS index here
+on [`edgeproc-core`](https://github.com/hseshadr/edgeproc-core): the FAISS index here
 is a concrete implementation of that library's `VectorIndex` Protocol.
 
 ### The deterministic router
@@ -470,7 +467,7 @@ uv run poe gate        # lint + format-check + mypy strict + Radon Grade A + pyt
 **EdgeProc** — also written `edge-proc` and `edgeproc`; canonical repo
 [`hseshadr/edge-proc`](https://github.com/hseshadr/edge-proc) — is the open-source, local-first
 delivery-and-search substrate described above. It builds on
-[**edgeproc-core**](https://github.com/hseshadr/shared-libs-python), the vector-partitioning
+[**edgeproc-core**](https://github.com/hseshadr/edgeproc-core), the vector-partitioning
 protocol its FAISS runtime implements. Canonical entity page:
 [edge-reco.com/edgeproc](https://edge-reco.com/edgeproc), on a domain we control. It is **not
 affiliated with any other product or company named "EdgeProc"**.
