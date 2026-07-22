@@ -57,6 +57,11 @@ responsibility.
 - **Concurrent mutation:** one cross-process lock covers fetch/verify/promote versus GC and
   makes the monotonic check/write indivisible. The default wait is 30 seconds; timeout is a
   typed `IntegrityError` and the caller should retry with jitter.
+- **Local vector state:** `FaissVectorIndex` serializes insert, rebuild, delete, search,
+  statistics, and staged persistence transitions per instance. Its save path validates
+  the index/metadata pair on load and atomically replaces both files. This guard is
+  process-local; applications sharing one index path across processes must provide an
+  external single-writer lock.
 - **Resource ceilings:** defaults are a 30-second HTTP client timeout per network
   operation, 256 MiB per response, 64 MiB decompressed per chunk, 4 GiB and 100,000 files
   per sync, 256 MiB per materialized file, and a 30-second mutation lock wait. Total sync time still scales with the
