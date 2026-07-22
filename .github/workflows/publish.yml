@@ -1,17 +1,28 @@
 # edge-proc — .github/workflows/publish.yml
 # PyPI release of `edge-proc` via OIDC Trusted Publishing. A `v*` tag push is the whole
-# trigger; there is NO PyPI token in this repo. One-time bootstrap (deferred — needs a
-# human): register the GitHub Actions trusted publisher on PyPI as a PENDING publisher
-# (edge-proc is not yet on PyPI). After the first OIDC publish creates the project, every
-# `git tag vX.Y.Z && git push --tags` releases automatically. The workflow filename + repo
-# + owner ARE the credential — no `twine` password, no stored API token.
+# trigger; there is NO PyPI token in this repo.
 #
-# The publish re-runs `uv run poe gate` on the tagged ref before building, so nothing ships
-# unless it passes the same gate CI enforces.
+# WHY THE JOB IS INLINE, not a call to the hseshadr/ci reusable workflow (learned from
+# assay's v0.1.1 red run 29886472639): PyPI Trusted Publishing matches the OIDC token's
+# `job_workflow_ref`, and for a job that `uses:` a CROSS-REPO reusable workflow that ref
+# names the ci repo's file (hseshadr/ci/.github/workflows/python-publish.yml) — never
+# this repo's publish.yml, which is what the trusted publisher is registered against.
+# Cross-repo reuse therefore ALWAYS fails with "invalid-publisher". The job below
+# reproduces the hseshadr/ci python-publish.yml steps (ci-v2.0.3; action pins copied
+# verbatim) so `job_workflow_ref` names THIS file and the registered publisher matches.
 #
-# NOTE: hseshadr/ci is pinned to a full commit SHA, not the moving `ci-v2` tag — a tag can be
-# repointed at new code, a SHA cannot. The trailing comment records which release that SHA is;
-# Dependabot's `github-actions` ecosystem bumps both the pin and the comment on a new release.
+# One-time bootstrap (deferred — needs a human): register the GitHub Actions trusted
+# publisher on PyPI as a PENDING publisher (edge-proc is not yet on PyPI), against
+# {owner, edge-proc, publish.yml}. After the first OIDC publish creates the project,
+# every `git tag vX.Y.Z && git push --tags` releases automatically. The workflow filename
+# + repo + owner ARE the credential — no `twine` password, no stored API token.
+#
+# The publish re-runs `uv run poe gate` on the tagged ref before building, so nothing
+# ships unless it passes the same gate CI enforces.
+#
+# NOTE: every `uses:` below is pinned to a full commit SHA, not a moving tag — a tag can
+# be repointed at new code, a SHA cannot. The trailing comment records which release that
+# SHA is; Dependabot's `github-actions` ecosystem bumps both the pin and the comment.
 name: Publish (PyPI, OIDC)
 on:
   push:
@@ -22,10 +33,68 @@ permissions:
   contents: read
 jobs:
   publish:
+    runs-on: ubuntu-latest
     permissions:
       id-token: write # OIDC — PyPI verifies this against the registered trusted publisher.
       contents: read
-    uses: hseshadr/ci/.github/workflows/python-publish.yml@bc68fde66f0805971e1b9aa444933b7975da80b1 # ci-v2.0.3
-    with:
-      working-directory: "."
-      sync-args: "--frozen --all-extras"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Python + uv (+ sync)
+        uses: hseshadr/ci/.github/actions/setup-python-uv@bc68fde66f0805971e1b9aa444933b7975da80b1 # ci-v2.0.3
+        with:
+          sync-args: "--frozen --all-extras"
+
+      - name: Gate (uv run poe gate)
+        run: uv run poe gate
+
+      - name: Build sdist + wheel
+        run: uv build --out-dir dist
+
+      # No `password:` input -> the action publishes via OIDC Trusted Publishing.
+      - name: Publish to PyPI (OIDC Trusted Publishing)
+        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1
+        with:
+          packages-dir: dist
+          attestations: true
+          print-hash: true
+
+      # "The upload step exited 0" and "the package exists" are DIFFERENT FACTS — six
+      # green publish runs once stacked up on a sibling package that 404'd on PyPI the
+      # whole time. Ask the registry, not the uploader. (Copied from the ci Lego's
+      # verify step; kept on purpose in the inline job.)
+      - name: Verify the release is actually on PyPI
+        run: |
+          shopt -s nullglob
+          sdists=(dist/*.tar.gz)
+          if ((${#sdists[@]} == 0)); then
+            echo "::error::No sdist in dist — cannot determine what was published."
+            exit 1
+          fi
+
+          # PEP 625: the sdist is {name}-{version}.tar.gz, and a PEP 440 version never
+          # contains '-', so the last '-' is the split point.
+          artifact="$(basename "${sdists[0]}" .tar.gz)"
+          raw_name="${artifact%-*}"
+          version="${artifact##*-}"
+          # PEP 503 normalisation for the URL: lowercase, runs of -_. collapse to '-'.
+          name="$(printf '%s' "$raw_name" | tr '[:upper:]' '[:lower:]' | sed -E 's/[-_.]+/-/g')"
+
+          url="https://pypi.org/pypi/${name}/${version}/json"
+          echo "Verifying ${name}==${version} is served by PyPI..."
+
+          # Registries have propagation delay, so retry — but a timeout is a FAILURE,
+          # never a pass. Bounded: 6 attempts, 10s apart (~60s).
+          for attempt in 1 2 3 4 5 6; do
+            if curl -fsS --max-time 15 -o /dev/null "$url"; then
+              echo "Verified: ${name}==${version} is live on PyPI."
+              exit 0
+            fi
+            echo "Attempt ${attempt}/6: not served yet; retrying in 10s..."
+            sleep 10
+          done
+
+          echo "::error::PUBLISH VERIFICATION FAILED — the upload step reported success, but PyPI does not serve ${name}==${version} (${url}) after ~60s. A green upload is not proof of a release. Most likely cause: an incomplete PyPI trusted-publisher bootstrap, or a job_workflow_ref/publisher mismatch. Check the project's Publishing settings, or the account-level pending publisher, on PyPI."
+          exit 1
