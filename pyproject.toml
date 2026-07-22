@@ -23,7 +23,7 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.5",
     "typer>=0.26.8",
-    "edgeproc-core>=0.2.0",  # >=0.2.0 ships edgeproc_core.errors (canonical errors)
+    "edgeproc-core>=0.2.1",  # first PyPI release shipping the edgeproc_core import package
 ]
 
 [project.optional-dependencies]
@@ -62,27 +62,10 @@ Homepage = "https://github.com/hseshadr/edge-proc"
 Repository = "https://github.com/hseshadr/edge-proc"
 Issues = "https://github.com/hseshadr/edge-proc/issues"
 
-[tool.uv.sources]
-# Open-source onboarding: clone ONLY this repo and `uv sync` — edgeproc-core
-# is pulled from public GitHub (it is not on PyPI).
-#
-# Pinned by full commit SHA to an UNTAGGED commit on that repo's `main`. It is not a
-# release: `git describe` calls it v0.2.0-18-g6cdf847 — 18 commits past v0.2.0 — and no
-# tag contains it.
-#
-# Why an untagged commit is nevertheless the right pin today: edge-proc imports
-# `edgeproc_core`, and no released tag carries that import package yet. The newest tag,
-# v0.2.0, still ships the pre-rename `shared_libs_python`, so pinning any tag would not
-# build. Pinning the SHA is also the stronger integrity choice regardless: a git TAG is
-# mutable — whoever can push to that repo can retarget `v0.2.0` at different code and
-# every clone would silently resolve a dependency nobody reviewed — whereas this SHA is
-# immutable, so `uv sync` is byte-for-byte reproducible for everyone.
-#
-# Re-pin to a real tag once upstream cuts a release containing the `edgeproc_core` rename.
-edgeproc-core = { git = "https://github.com/hseshadr/shared-libs-python.git", rev = "6cdf8475b223262821622a021c561aed9213a472" }
-
-# Co-developing edgeproc-core locally? Clone it next to this repo and swap the
-# line above for a path source (uncomment):
+# edgeproc-core installs from PyPI (its 0.2.1 release is the first to ship the
+# `edgeproc_core` import package). Co-developing it locally? Clone it next to
+# this repo and add a path override (uncomment):
+#   [tool.uv.sources]
 #   edgeproc-core = { path = "../shared-libs-python", editable = true }
 
 # The version is single-sourced from edgeproc/_version.py — hatchling reads it at
