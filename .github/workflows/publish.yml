@@ -38,12 +38,12 @@ jobs:
       id-token: write # OIDC — PyPI verifies this against the registered trusted publisher.
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Setup Python + uv (+ sync)
-        uses: hseshadr/ci/.github/actions/setup-python-uv@bc68fde66f0805971e1b9aa444933b7975da80b1 # ci-v2.0.3
+        uses: hseshadr/ci/.github/actions/setup-python-uv@72521e7e660caa157219747d30a3b4fe88b404d3 # ci-v2.0.3
         with:
           sync-args: "--frozen --all-extras"
 
