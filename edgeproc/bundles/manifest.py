@@ -117,12 +117,21 @@ def is_fresh_sequence(incoming: VersionPointer, active: VersionPointer) -> bool:
     """Freshness predicate for a downstream anti-replay guard (monotonic ``sequence``).
 
     True only when ``incoming.sequence`` is STRICTLY greater than ``active.sequence`` — an
-    equal or lower sequence is a stale replay (non-fresh). When either pointer carries no
-    sequence the check is undecidable and returns True, so a legacy pointer is never called
-    stale; the caller falls back to the version-based anti-rollback guard.
+    equal or lower sequence is a stale replay (non-fresh).
+
+    FAIL-CLOSED on a missing counter: once ``active`` carries a sequence, an ``incoming``
+    that carries none proves nothing and is NOT fresh. Answering an active counter with
+    silence used to pass, so deleting the field from a validly signed older pointer
+    defeated the guard outright.
+
+    An ``active`` with no sequence is the one undecidable case — there is no counter state
+    to roll back to — so this returns True and the caller's version-based anti-rollback
+    guard decides. That is what keeps a pre-sequence store upgradable.
     """
-    if incoming.sequence is None or active.sequence is None:
+    if active.sequence is None:
         return True
+    if incoming.sequence is None:
+        return False
     return incoming.sequence > active.sequence
 
 

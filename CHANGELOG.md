@@ -4,6 +4,36 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
 
 ## [Unreleased]
 
+### Fixed
+- **Anti-rollback and anti-replay now fail CLOSED.** Both promote-time freshness guards
+  could be bypassed by supplying *less* information rather than better credentials:
+  - A `version` string PEP 440 cannot parse made the anti-rollback guard swallow
+    `InvalidVersion` and answer "not a downgrade", so any publisher using date-style
+    versions had no anti-rollback at all. Measured before the fix: a genuinely signed
+    `2019-01-01` pointer replaced an installed `2026-07-01` one.
+  - A missing `sequence` made the anti-replay guard answer "fresh", so deleting the
+    counter from a validly signed older pointer defeated it. Measured before the fix: a
+    device on `sequence=7` accepted an unsequenced pointer at an equal version, where the
+    PEP 440 guard never speaks.
+
+  `promote` now requires PROOF that the incoming pointer is at least as fresh as the
+  active one — a strictly-greater monotonic `sequence`, or a comparable PEP 440 `version`.
+  Either comparison proving staleness refuses; *neither* comparison being able to speak
+  also refuses. A first promote has nothing to be fresher than and is unaffected, a
+  byte-identical re-promote stays idempotent, and a publisher whose versions PEP 440
+  cannot parse keeps shipping by binding `--sequence`. `RollbackError` now names which
+  proof failed.
+
+  This reverses a covenant the project previously held ("the guard must never reject a
+  validly-signed bundle"): a signature proves *authorship*, never *freshness*, and a
+  replayed pointer is validly signed by construction.
+
+### Changed
+- **`is_fresh_sequence` is fail-closed on an absent counter.** Once the active pointer
+  carries a `sequence`, an incoming pointer that carries none is no longer "fresh". An
+  active pointer with no counter stays undecidable — there is no counter state to roll
+  back to — so a pre-sequence store remains upgradable and PEP 440 decides there.
+
 ## [0.1.5] — 2026-07-21
 
 First release published to PyPI as

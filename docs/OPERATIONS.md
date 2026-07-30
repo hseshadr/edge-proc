@@ -20,6 +20,14 @@ consumer should publish with `bundle_id`, `channel`, and `sequence`, then sync w
 `expected_bundle_id` and `expected_channel`; legacy unbound pointers remain compatible but
 do not provide cross-bundle identity protection.
 
+Promotion is fail-closed on freshness, not merely on the absence of disproof. Replacing the
+active pointer requires PROOF that the incoming one is at least as fresh: a strictly-greater
+monotonic `sequence`, or a `version` PEP 440 can compare. Either comparison proving staleness
+refuses the promote, and so does neither comparison being able to speak — a version PEP 440
+cannot parse with no `sequence` to fall back on is refused, because a signature proves who
+published a pointer and never how recent it is. Publishers whose version scheme PEP 440
+cannot parse (date strings, build labels) must bind `--sequence` to keep shipping.
+
 Before promotion, EdgeProc verifies the pointer signature, pinned identity, manifest hash,
 manifest identity, every chunk hash, and complete file reassembly. Paths are contained
 under the selected root. HTTP bodies, decompressed chunks, aggregate sync bytes,

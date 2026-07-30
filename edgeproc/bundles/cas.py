@@ -12,6 +12,10 @@ pinned and fail-closed by construction:
   POSIX and Windows, so a concurrent reader (or a crash mid-swap) sees the OLD
   pointer or the NEW one, never a torn/empty ``active``. (Pinned: not
   ``renameat2``, not symlinks.)
+- **Proved-fresher promote** — replacing the active pointer requires PROOF that the
+  incoming one is at least as fresh: a strictly-greater monotonic ``sequence``, or a
+  comparable PEP 440 ``version``. If neither comparison can speak — an unparseable
+  version and no counter — the promote is refused. Absence of disproof is not proof.
 - **Mark-sweep GC** — the reachable set is the active manifest plus every chunk
   it references; everything else is swept. With nothing promoted, ``gc`` is a
   fail-safe no-op (returning 0), never a wipe.
@@ -27,8 +31,9 @@ import hashlib
 import os
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
+from enum import Enum, auto
 from pathlib import Path
-from typing import ClassVar, Protocol, runtime_checkable
+from typing import ClassVar, Final, Protocol, runtime_checkable
 
 import zstandard
 from filelock import FileLock, Timeout
@@ -59,8 +64,10 @@ class IntegrityError(Exception):
 
 
 class RollbackError(IntegrityError):
-    """A promote would downgrade the active pointer to an OLDER version (fail-closed).
+    """A promote could not prove it is at least as fresh as the active pointer (fail-closed).
 
+    Raised for a provable downgrade (older version, non-increasing sequence) AND for a
+    pointer that proves nothing at all — an unparseable version with no monotonic counter.
     Subclasses :class:`IntegrityError` — an anti-rollback violation is a trust-boundary
     failure, so every existing ``IntegrityError`` handler already refuses it.
     """
@@ -247,17 +254,19 @@ class FilesystemCacheStore:
             _atomic_write(self._store_path("active"), pointer.model_dump_json().encode("utf-8"))
 
     def _reject_rollback(self, pointer: VersionPointer) -> None:
-        """Refuse a promote whose version is provably OLDER than the active one.
+        """Refuse a promote that cannot PROVE it is at least as fresh as the active one.
 
-        Anti-rollback: a validly-signed but stale pointer (a replayed old ``/latest``)
-        must not downgrade a client that already promoted a newer version. Only a
-        *provable* downgrade is refused; an equal/newer version, a first promote, or a
-        version string neither side can parse is allowed — so no already-valid, signed
-        bundle is ever rejected.
+        Anti-rollback/anti-replay: a validly-signed but stale pointer (a replayed old
+        ``/latest``) must not downgrade a client that already promoted a newer version.
+        Fail-closed — proof is required, not merely the absence of disproof. A first
+        promote has nothing to be fresher than and is always allowed.
         """
         active = self.read_active()
-        if active is not None and _is_downgrade(pointer, active):
-            raise RollbackError("refusing rollback or reuse of an active monotonic sequence")
+        if active is None:
+            return
+        reason = _downgrade_reason(pointer, active)
+        if reason is not None:
+            raise RollbackError(reason)
 
     def gc(self) -> int:
         with self.mutation():
@@ -295,37 +304,74 @@ class FilesystemCacheStore:
         return removed
 
 
-def _is_downgrade(incoming: VersionPointer, active: VersionPointer) -> bool:
-    """True iff ``incoming`` is provably older than ``active`` — by sequence OR version.
+class _Freshness(Enum):
+    """What ONE comparison proved: fresh enough, provably stale, or nothing at all."""
 
-    A lower monotonic ``sequence`` is a downgrade. An equal sequence is allowed only for
-    an exact idempotent re-promote; different content at that sequence is equivocation.
-    Legacy pointers still fall back to PEP 440, preserving their original behavior.
+    FRESH = auto()
+    STALE = auto()
+    UNDECIDABLE = auto()
+
+
+_STALE_SEQUENCE: Final = "refusing rollback: sequence is not fresher than the active pointer's"
+_STALE_VERSION: Final = "refusing rollback: version is older (PEP 440) than the active pointer's"
+_UNPROVABLE: Final = (
+    "refusing rollback: version is not PEP 440 and no monotonic sequence proves freshness"
+)
+
+
+def _downgrade_reason(incoming: VersionPointer, active: VersionPointer) -> str | None:
+    """Why ``incoming`` may not replace ``active`` — or ``None`` when it provably may.
+
+    Re-promoting the byte-identical active pointer is idempotent (a no-op write), not
+    equivocation, so it is the one case that needs no proof.
     """
-    return _sequence_violation(incoming, active) or _version_downgrade(
-        incoming.version, active.version
+    if incoming == active:
+        return None
+    return _freshness_refusal(
+        _sequence_verdict(incoming, active),
+        _version_verdict(incoming.version, active.version),
     )
 
 
-def _sequence_violation(incoming: VersionPointer, active: VersionPointer) -> bool:
-    """Reject a pointer that is not strictly fresher — except an identical re-promote.
+def _freshness_refusal(sequence: _Freshness, version: _Freshness) -> str | None:
+    """Combine the two verdicts FAIL-CLOSED: either one stale refuses, and so does no proof.
 
-    The counter comparison is :func:`is_fresh_sequence`, so there is exactly ONE
-    implementation of "is this sequence fresher" and the public predicate can never
-    drift from what promotion actually enforces. Promotion adds the one rule the pure
-    predicate does not carry: re-promoting the byte-identical active pointer is
-    idempotent, not equivocation. A legacy pointer (either counter unset) is
-    undecidable, so ``is_fresh_sequence`` returns True and PEP 440 still decides.
+    The rule the whole guard reduces to: a promote must be PROVED at least as fresh as the
+    active pointer. Two comparisons can supply that proof — a strictly-greater monotonic
+    counter, or a comparable PEP 440 version. Neither speaking is a refusal, not a pass.
     """
-    return not is_fresh_sequence(incoming, active) and incoming != active
+    if sequence is _Freshness.STALE:
+        return _STALE_SEQUENCE
+    if version is _Freshness.STALE:
+        return _STALE_VERSION
+    if _Freshness.FRESH in (sequence, version):
+        return None
+    return _UNPROVABLE
 
 
-def _version_downgrade(incoming: str, active: str) -> bool:
-    """True iff ``incoming`` is a provably-older PEP 440 version than ``active``."""
+def _sequence_verdict(incoming: VersionPointer, active: VersionPointer) -> _Freshness:
+    """Monotonic-counter verdict, delegated to :func:`is_fresh_sequence`.
+
+    There is exactly ONE implementation of "is this sequence fresher", so the public
+    predicate can never drift from what promotion actually enforces. An ``active`` with no
+    counter has no counter state to roll back to — undecidable, so the version decides.
+    """
+    if active.sequence is None:
+        return _Freshness.UNDECIDABLE
+    return _Freshness.FRESH if is_fresh_sequence(incoming, active) else _Freshness.STALE
+
+
+def _version_verdict(incoming: str, active: str) -> _Freshness:
+    """PEP 440 verdict; a version either side cannot parse proves nothing (fail-closed).
+
+    ``InvalidVersion`` used to be swallowed into "not a downgrade", which handed every
+    date-versioned publisher a rollback bypass. It is now an absence of proof, and an
+    absence of proof on BOTH comparisons refuses the promote.
+    """
     try:
-        return Version(incoming) < Version(active)
+        return _Freshness.STALE if Version(incoming) < Version(active) else _Freshness.FRESH
     except InvalidVersion:
-        return False
+        return _Freshness.UNDECIDABLE
 
 
 def _decompress(stored: bytes, max_output_size: int) -> bytes:
