@@ -21,7 +21,12 @@ from pathlib import Path
 import pytest
 import zstandard
 
-from edgeproc.bundles.cas import CacheStore, FilesystemCacheStore, IntegrityError
+from edgeproc.bundles.cas import (
+    CacheStore,
+    FilesystemCacheStore,
+    IntegrityError,
+    RollbackError,
+)
 from edgeproc.bundles.manifest import (
     ChunkRef,
     FileEntry,
@@ -206,8 +211,6 @@ def test_promote_and_read_active_swaps_to_newest(tmp_path: Path) -> None:
 def test_promote_refuses_rollback_to_older_version(tmp_path: Path) -> None:
     # Anti-rollback: once a NEWER version is active, a validly-signed but OLDER pointer
     # must be refused — an attacker replaying a stale `/latest` cannot downgrade a client.
-    from edgeproc.bundles.cas import RollbackError  # noqa: PLC0415
-
     store = _store(tmp_path)
     newer = _manifest_for(store, b"new" * 16)
     older = _manifest_for(store, b"old" * 16)
@@ -246,10 +249,14 @@ def test_promote_allows_equal_and_forward_versions(tmp_path: Path) -> None:
     assert store.read_active() == p_c
 
 
-def test_promote_allows_unparseable_version_covenant(tmp_path: Path) -> None:
-    # Covenant: the anti-rollback guard must NEVER reject a validly-signed bundle. When a
-    # version string is not PEP 440, there is nothing to compare, so a downgrade cannot be
-    # PROVEN — the promote must still succeed (fail-OPEN), never fail-closed on the guard.
+def test_promote_refuses_a_version_pep440_cannot_compare(tmp_path: Path) -> None:
+    # Fail-CLOSED: when a version string is not PEP 440 there is nothing to compare, so the
+    # promote cannot PROVE it is fresher — and an unprovable promote is a refusal.
+    #
+    # This test asserted the exact opposite until 2026-07-30 ("cannot prove a downgrade →
+    # allow"), which is how a 2019 pointer replaced a 2026 one for any publisher using
+    # date-style versions. See tests/bundles/test_fail_closed_freshness.py for the attack
+    # driven end to end, and for the `sequence` escape hatch this leaves open.
     store = _store(tmp_path)
     active = _manifest_for(store, b"act" * 16)
     incoming = _manifest_for(store, b"inc" * 16)
@@ -264,8 +271,23 @@ def test_promote_allows_unparseable_version_covenant(tmp_path: Path) -> None:
         signature="s",
     )
     store.promote(active_ptr)
-    store.promote(weird_ptr)  # unparseable version → cannot prove downgrade → allowed
-    assert store.read_active() == weird_ptr
+    with pytest.raises(RollbackError):
+        store.promote(weird_ptr)
+    assert store.read_active() == active_ptr
+
+
+def test_first_promote_needs_no_freshness_proof(tmp_path: Path) -> None:
+    # Nothing is active yet, so there is nothing to be fresher THAN: the first promote of
+    # an unparseable version is accepted. Fail-closed applies to replacing trusted state.
+    store = _store(tmp_path)
+    manifest = _manifest_for(store, b"first" * 16)
+    pointer = VersionPointer(
+        manifest_hash=store.put_manifest(canonical_bytes(manifest)),
+        version="not-a-semver",
+        signature="s",
+    )
+    store.promote(pointer)
+    assert store.read_active() == pointer
 
 
 def test_promote_crash_safety_keeps_old_pointer(
