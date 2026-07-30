@@ -169,6 +169,18 @@ async def test_rebuild_with_config_keeps_dimension_but_updates_other_knobs() -> 
 
 
 async def test_rebuild_serializes_insert_and_search_on_real_faiss() -> None:
+    """Serialization is MUTUAL EXCLUSION, not a queue order — assert only what is promised.
+
+    ``docs/OPERATIONS.md`` promises that insert/rebuild/search are serialized per instance.
+    It promises nothing about which of two concurrently-issued operations wins the lock,
+    and it cannot: the guard is a ``threading.RLock``, which has no fairness guarantee, so
+    the queued search may be granted before or after the queued insert. Asserting one of
+    those orders made this test fail 8 of 12 local runs while passing on CI's scheduler.
+
+    What IS guaranteed, and is what this now asserts: neither operation proceeds while the
+    rebuild holds the lock; the queued search observes a coherent index rather than a torn
+    one; and once every queued operation has drained, no write was lost.
+    """
     idx = _index()
     await idx.insert([_emb("base", [1.0, 0.0, 0.0, 0.0])])
     rebuild_entered = Event()
@@ -186,12 +198,15 @@ async def test_rebuild_serializes_insert_and_search_on_real_faiss() -> None:
     insert_task = asyncio.create_task(idx.insert([_emb("new", [0.0, 1.0, 0.0, 0.0])]))
     search_task = asyncio.create_task(idx.search([1.0, 0.0, 0.0, 0.0], k=5))
     await asyncio.sleep(0.05)
-    assert not insert_task.done()
+    assert not insert_task.done()  # the rebuild holds the lock, so nothing else proceeds
     assert not search_task.done()
     release_rebuild.set()
     await asyncio.gather(rebuild_task, insert_task)
-    results = await search_task
-    assert {doc for doc, _ in results} == {"base", "new"}
+
+    queued = {doc for doc, _ in await search_task}
+    assert queued in ({"base"}, {"base", "new"})  # coherent on either side of the insert
+    drained = {doc for doc, _ in await idx.search([1.0, 0.0, 0.0, 0.0], k=5)}
+    assert drained == {"base", "new"}  # the rebuild dropped nothing and lost no write
     assert (await idx.get_stats()).tombstone_count == 0
 
 

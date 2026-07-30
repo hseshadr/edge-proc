@@ -112,11 +112,18 @@ def test_legacy_signed_pointer_still_verifies_under_new_code() -> None:
 
 @pytest.mark.parametrize(
     ("incoming", "active", "fresh"),
-    [(5, 3, True), (3, 5, False), (5, 5, False), (None, 3, True), (5, None, True)],
+    [(5, 3, True), (3, 5, False), (5, 5, False), (None, 3, False), (5, None, True)],
 )
-def test_is_fresh_sequence_flags_lower_and_equal_as_stale(
+def test_is_fresh_sequence_flags_lower_equal_and_absent_as_stale(
     incoming: int | None, active: int | None, fresh: bool
 ) -> None:
+    """``(None, 3)`` is the anti-replay fix: an active counter cannot be answered by silence.
+
+    It asserted ``True`` until 2026-07-30 — deleting the ``sequence`` field from a replayed
+    pointer was enough to make the freshness guard call it fresh. ``(5, None)`` stays True:
+    an active pointer with NO counter has no counter state to roll back to, so the counter
+    is undecidable there and the PEP 440 version guard is what decides.
+    """
     a = VersionPointer(manifest_hash="ab" * 32, version="1.0.0", sequence=incoming, signature="s")
     b = VersionPointer(manifest_hash="cd" * 32, version="1.0.0", sequence=active, signature="s")
     assert is_fresh_sequence(a, b) is fresh
