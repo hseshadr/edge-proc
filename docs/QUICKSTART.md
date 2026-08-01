@@ -171,7 +171,7 @@ uv run edgeproc sync --base-url origin --cache-dir cache2 --pretty
 
 - Read [ARCHITECTURE.md](ARCHITECTURE.md) for the module map and the security model.
 - See [`examples/`](../examples/) for a registry-wired in-process version that doesn't use the CLI.
-- Browse `docs/diagrams/` if you prefer pictures.
+- Prefer pictures? [ARCHITECTURE.md](ARCHITECTURE.md) draws the same loop as three diagrams.
 
 ## Going over the wire
 

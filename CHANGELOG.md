@@ -29,6 +29,12 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
   replayed pointer is validly signed by construction.
 
 ### Changed
+- **Architecture diagrams are now inline mermaid, not committed SVGs.** The three d2 sources
+  under `docs/diagrams/` and their rendered SVGs are gone; the diagrams live as `mermaid`
+  code fences inside `docs/ARCHITECTURE.md`, next to the prose that explains them. d2 emitted
+  roughly 4:1 letterboxed images that shrank to ~160 px tall in a GitHub-width column, which
+  made the labels unreadable. Mermaid renders at a legible height, has no build artifact that
+  can go stale against the text, and shows up as a readable diff in review.
 - **`is_fresh_sequence` is fail-closed on an absent counter.** Once the active pointer
   carries a `sequence`, an incoming pointer that carries none is no longer "fresh". An
   active pointer with no counter stays undecidable — there is no counter state to roll

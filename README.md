@@ -409,7 +409,7 @@ this runs on the failure path, and building the settings object there would let 
 malformed variable raise *while reporting another error*, swallowing the refusal being reported.
 
 For the full picture — system context, bundle lifecycle, the verification chain, and the module
-map — see [**docs/ARCHITECTURE.md**](docs/ARCHITECTURE.md) (with d2 diagrams).
+map — see [**docs/ARCHITECTURE.md**](docs/ARCHITECTURE.md) (with diagrams).
 
 ### Measured numbers
 
@@ -451,7 +451,6 @@ content-defined chunking), all behind opt-in extras.
   manifest, module boundaries, seams.
 - [docs/OPERATIONS.md](docs/OPERATIONS.md) — threat model, privacy flow, recovery/SLA ownership,
   resource ceilings, and the measured performance gate.
-- [docs/diagrams/](docs/diagrams/) — d2 sources + rendered SVGs.
 
 ## Develop
 

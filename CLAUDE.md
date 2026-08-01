@@ -34,8 +34,10 @@ it here**. Design spec: `~/dev/project-ideas/oss/edgeproc.md`.
   `keygen` · `publish` · `sync` · `route`.
 - `tests/` — unit + integration + public-surface tests (one pytest suite).
 - `examples/` — `quickstart.py`, `run_loop.sh`, tiny realistic catalog.
-- `docs/` — `ARCHITECTURE.md`, `QUICKSTART.md`, `diagrams/` (d2 sources +
-  rendered SVGs — **d2, never mermaid**).
+- `docs/` — `ARCHITECTURE.md`, `QUICKSTART.md`. Diagrams live **inline as
+  `mermaid` code fences** in the markdown that explains them — **mermaid,
+  never d2**: no separate diagram source, no committed image to go stale,
+  and the diagram diffs in review.
 
 ## Invariants (don't break without updating the spec)
 
