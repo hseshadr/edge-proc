@@ -19,11 +19,12 @@ import os
 from contextlib import AbstractContextManager
 from pathlib import Path
 from threading import RLock
-from typing import Final
+from typing import ClassVar, Final
 
 import faiss
 import numpy as np
 from edgeproc_core.vector_mgmt.core.types import (
+    DistanceMetric,
     IndexConfig,
     IndexStats,
     Metadata,
@@ -33,6 +34,8 @@ from edgeproc_core.vector_mgmt.core.types import (
 from numpy.typing import NDArray
 from pydantic import BaseModel
 
+from edgeproc.errors import CONFIG_INVALID
+
 # FROZEN on-disk contract: a saved index dir is addressed by these exact filenames, so
 # load() can find a save()d index across versions. Renaming either breaks existing dirs.
 _INDEX_FILE: Final[str] = "index.faiss"
@@ -41,6 +44,34 @@ _INDEX_TEMP: Final[str] = ".index.faiss.tmp"
 _STATE_TEMP: Final[str] = ".state.json.tmp"
 _PERSISTENCE_LOCKS: dict[Path, AbstractContextManager[object]] = {}
 _PERSISTENCE_LOCKS_GUARD = RLock()
+
+#: The one metric this backend computes. ``IndexFlatIP`` scores inner product, which over
+#: the unit-normalized vectors ``LocalEncoder`` emits IS cosine similarity; ``_collect``
+#: returns ``1 - similarity``, i.e. cosine DISTANCE, per the shared-libs contract. Naming
+#: any other metric — including ``inner_product``, whose caller would read that returned
+#: number as a similarity and be wrong by exactly that transform — is refused.
+_SUPPORTED_METRIC: Final[DistanceMetric] = "cosine"
+
+#: Why the HNSW knobs cannot be honoured, said once so every refusal says it identically.
+_NO_GRAPH: Final[str] = (
+    "this backend builds a brute-force faiss.IndexFlatIP, which has no graph to tune"
+)
+
+
+class UnsupportedIndexOptionError(ValueError):
+    """A caller asked for an index option this FAISS backend cannot implement (fail-closed).
+
+    Raised instead of accepting the option and quietly doing something else. Silently
+    ignoring ``distance_metric="l2"`` is worse than rejecting it: the caller believes they
+    configured Euclidean distance, gets inner product, and has no signal at all.
+
+    Subclasses :class:`ValueError` — the module's other refusals (duplicate id, wrong
+    dimension, torn sidecar) already are one, so a caller guarding index construction
+    catches this unchanged. Carries the canonical ``config.invalid`` code so a consumer
+    can render it via :func:`edgeproc.errors.problem_details_for`.
+    """
+
+    code: ClassVar[str] = CONFIG_INVALID
 
 
 class _PersistedState(BaseModel):
@@ -53,11 +84,16 @@ class _PersistedState(BaseModel):
 
 
 class FaissVectorIndex:
-    """Async ``VectorIndex`` over a FAISS ``IndexFlatIP`` with tombstone deletes."""
+    """Async ``VectorIndex`` over a FAISS ``IndexFlatIP`` with tombstone deletes.
+
+    Honours exactly two of ``IndexConfig``'s knobs — ``dimension`` and a
+    ``distance_metric`` of ``"cosine"`` — and REFUSES the rest rather than accepting
+    them and doing something else. See :class:`UnsupportedIndexOptionError`.
+    """
 
     def __init__(self, index_name: str, config: IndexConfig | None = None) -> None:
         self.index_name = index_name
-        self.config = config or IndexConfig()
+        self.config = _honoured(config or IndexConfig())
         self._faiss: faiss.Index = faiss.IndexFlatIP(self.config.dimension)
         self._faiss_ids: list[str] = []
         self._live: dict[str, NDArray[np.float32]] = {}
@@ -121,8 +157,10 @@ class FaissVectorIndex:
         query_vector: list[float],
         k: int,
         filters: Metadata | None = None,
-        ef_search: int | None = None,  # accepted for Protocol parity; flat index has no such knob
+        ef_search: int | None = None,  # present for Protocol parity; refused, never dropped
     ) -> list[tuple[str, float]]:
+        if ef_search is not None:
+            raise UnsupportedIndexOptionError(f"cannot honour ef_search: {_NO_GRAPH}")
         return await asyncio.to_thread(self._search_sync, query_vector, k, filters)
 
     async def delete(self, entity_ids: list[str]) -> None:
@@ -227,7 +265,11 @@ class FaissVectorIndex:
     def _rebuild_sync(self, config: IndexConfig | None) -> None:
         with self._lock:
             if config is not None:
-                self.config = config.model_copy(update={"dimension": self.config.dimension})
+                # Validate BEFORE adopting: a refused rebuild must leave the index exactly
+                # as it was, not half-reconfigured with the offending knob already stored.
+                self.config = _honoured(config).model_copy(
+                    update={"dimension": self.config.dimension}
+                )
             survivors = list(self._live.items())
             self._faiss = faiss.IndexFlatIP(self.config.dimension)
             self._reindex_survivors(survivors)
@@ -239,6 +281,35 @@ class FaissVectorIndex:
         self._row_of = {entity_id: row for row, entity_id in enumerate(self._faiss_ids)}
         if survivors:
             self._faiss.add(np.vstack([vector for _, vector in survivors]))
+
+
+def _honoured(config: IndexConfig) -> IndexConfig:
+    """Return ``config`` if this backend can implement every knob it sets, else refuse.
+
+    ``IndexConfig`` is shared-libs' wide, pass-through type: its own docstring says a
+    backend "is free to honour or ignore" the HNSW knobs. Ignoring is what this refuses
+    to do — an option that changes nothing must not look like an option that worked.
+    """
+    if config.distance_metric != _SUPPORTED_METRIC:
+        raise UnsupportedIndexOptionError(
+            f"distance_metric={config.distance_metric!r} is not implemented here: this "
+            f"backend computes {_SUPPORTED_METRIC} distance only"
+        )
+    tuned = _tuned_graph_knobs(config)
+    if tuned:
+        raise UnsupportedIndexOptionError(f"cannot honour {', '.join(tuned)}: {_NO_GRAPH}")
+    return config
+
+
+def _tuned_graph_knobs(config: IndexConfig) -> list[str]:
+    """The HNSW knobs this caller actually changed — a default value asks for nothing."""
+    default = IndexConfig()
+    changed: tuple[tuple[str, bool], ...] = (
+        ("m", config.m != default.m),
+        ("ef_construction", config.ef_construction != default.ef_construction),
+        ("ef_search", config.ef_search != default.ef_search),
+    )
+    return [knob for knob, tuned in changed if tuned]
 
 
 def _as_vector(values: list[float]) -> NDArray[np.float32]:
