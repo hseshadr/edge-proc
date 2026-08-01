@@ -28,6 +28,20 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
   validly-signed bundle"): a signature proves *authorship*, never *freshness*, and a
   replayed pointer is validly signed by construction.
 
+### Fixed
+- **The README said `edge-proc` "isn't on PyPI yet" thirteen lines above `pip install
+  edge-proc`.** It has been on PyPI since 2026-07-22 (0.1.5). A reader who believed the first
+  line stopped there and never ran the quickstart. Install now leads with PyPI, and the
+  clone-and-go path is framed as what it is: for running the walkthrough or hacking on
+  EdgeProc. Added a PyPI version badge so the claim is checkable at a glance.
+- **The quickstart's stated cost was wrong and its shape was unstated.** "About 200 MB free"
+  was off by 5x — measured from a fresh clone into a fresh venv with cold caches, the real
+  cost is ~1.0 GB (947 MB venv, torch and FAISS dominating, plus an 87 MB `all-MiniLM-L6-v2`
+  download) and about one minute of machine time. Both READMEs now print the measured table.
+  They also say the shape out loud: one 30-line Python script, then the CLI. The script is not
+  ceremony — no `edgeproc build-index` verb exists, because persisting an index is library
+  work. Dropped the "five-minute" framing in favor of the numbers.
+
 ### Changed
 - **Architecture diagrams are now inline mermaid, not committed SVGs.** The three d2 sources
   under `docs/diagrams/` and their rendered SVGs are gone; the diagrams live as `mermaid`

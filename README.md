@@ -3,6 +3,7 @@
 **Ship a big file to a lot of devices — and let every one of them prove it's the real file, unmodified, before using it. Then send only the parts that changed.**
 
 [![CI](https://github.com/hseshadr/edge-proc/actions/workflows/ci.yml/badge.svg)](https://github.com/hseshadr/edge-proc/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/edge-proc.svg)](https://pypi.org/project/edge-proc/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/downloads/)
 
@@ -49,18 +50,35 @@ embedding API, no vector database, no ranking server in the request path.
 
 ## See it work
 
-Everything below was run to produce the output shown. About five minutes, most of it a
-one-time model download.
+Everything below was run to produce the output shown.
+
+**The real shape, so nothing surprises you:** one 30-line Python script, then five CLI
+commands. The script exists because persisting an index is library work — there is no
+`edgeproc build-index` verb, and pretending otherwise would just hide the interesting part.
+
+Measured on a fresh clone into a fresh venv with cold caches (Apple Silicon, fast connection):
+
+| | measured |
+|---|---|
+| `uv sync --all-extras` | 5.5 s, 75 packages |
+| step 1, first run | 43 s — the one-time `all-MiniLM-L6-v2` download is 87 MB of it |
+| steps 2–6 (`keygen` → `route`) | 7.5 s |
+| **total machine time** | **~1 minute** |
+| **total disk** | **~1.0 GB** — 947 MB venv (torch + FAISS) + 87 MB model |
+
+The venv, not the model, is what costs you a gigabyte. Budget more wall-clock on a slow link;
+the download is one-time and every later run reuses it.
 
 ```bash
 git clone https://github.com/hseshadr/edge-proc.git
 cd edge-proc
-uv sync --all-extras   # first run also downloads a ~90 MB embedding model
+uv sync --all-extras   # ~950 MB venv; step 1 then downloads an 87 MB embedding model
 ```
 
 ### 1. Make something worth shipping
 
-A small product catalog, turned into a searchable index on disk.
+A small product catalog, turned into a searchable index on disk. This is the one script in the
+walkthrough — everything after it is a CLI command.
 
 ```bash
 cat > save_index.py <<'PY'
@@ -299,8 +317,18 @@ Everything above is the friendly surface. Here is what actually happens, in the 
 
 ### Install
 
-edge-proc isn't on PyPI yet, so the working install is the clone-and-go setup above — one
-command, no sibling checkouts:
+EdgeProc is on PyPI as [`edge-proc`](https://pypi.org/project/edge-proc/). The heavy pieces sit
+behind extras, so you pull only what you use:
+
+```bash
+pip install edge-proc                    # core + CLI (pure router, contracts)
+pip install edge-proc[localvec]          # + FAISS vector runtime (EMBED / SEARCH / RANK)
+pip install edge-proc[bundles]           # + manifest + checksum sync substrate
+pip install edge-proc[localvec,bundles]  # full local substrate
+```
+
+To run the walkthrough above, or to hack on EdgeProc itself, clone instead — one command, no
+sibling checkouts:
 
 ```bash
 git clone https://github.com/hseshadr/edge-proc.git
@@ -314,15 +342,6 @@ release shipping the `edgeproc_core` import package), so `uv sync` fetches
 everything; nothing else to clone. Co-developing `edgeproc-core` alongside
 EdgeProc? Clone it next to this repo and add the path override commented in
 `pyproject.toml`.
-
-Or install from PyPI — the extras install directly:
-
-```bash
-pip install edge-proc                    # core + CLI (pure router, contracts)
-pip install edge-proc[localvec]          # + FAISS vector runtime (EMBED / SEARCH / RANK)
-pip install edge-proc[bundles]           # + manifest + checksum sync substrate
-pip install edge-proc[localvec,bundles]  # full local substrate
-```
 
 EdgeProc is **purely a dependency** — a library an application embeds, not a service you sign
 up for. The core is tiny; the heavy machinery (FAISS, sync) is opt-in behind extras. It builds
@@ -446,7 +465,7 @@ content-defined chunking), all behind opt-in extras.
 ## Docs
 
 - [docs/QUICKSTART.md](docs/QUICKSTART.md) — the `keygen → publish → sync → route` loop as a
-  standalone five-minute walkthrough.
+  standalone walkthrough, with the measured time and disk cost up front.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system context, bundle lifecycle, CAS +
   manifest, module boundaries, seams.
 - [docs/OPERATIONS.md](docs/OPERATIONS.md) — threat model, privacy flow, recovery/SLA ownership,
