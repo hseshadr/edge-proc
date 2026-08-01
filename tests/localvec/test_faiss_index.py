@@ -17,7 +17,8 @@ from edgeproc_core.vector_mgmt.core.types import (
     VectorIndex,
 )
 
-from edgeproc.localvec.faiss_index import FaissVectorIndex
+from edgeproc import errors
+from edgeproc.localvec.faiss_index import FaissVectorIndex, UnsupportedIndexOptionError
 
 
 def _index() -> FaissVectorIndex:
@@ -159,12 +160,24 @@ async def test_rebuild_of_a_fully_deleted_index_leaves_it_empty_and_searchable()
     assert await idx.search([1.0, 0.0, 0.0, 0.0], k=5) == []  # empty, not a crash
 
 
-async def test_rebuild_with_config_keeps_dimension_but_updates_other_knobs() -> None:
+async def test_rebuild_pins_dimension_to_the_stored_vectors() -> None:
+    """INVERTED from ``test_rebuild_with_config_keeps_dimension_but_updates_other_knobs``.
+
+    That test asserted ``idx.config.ef_search == 42`` — that the knob was STORED — and
+    called it "other knobs are adopted". Nothing adopted it. ``ef_search`` was written to
+    ``self.config`` and then dropped: the index is a brute-force ``IndexFlatIP`` with no
+    graph to tune, and no code path ever read the value back. The assertion would have
+    kept passing with the entire configuration path deleted, so it measured shape, not
+    property — a passing test that asserted the defect as the requirement.
+
+    What survives here is the half that was always real: a rebuild cannot re-dimension
+    vectors already in the index. The knob's actual behaviour is asserted below, as a
+    refusal — the honest answer to a request this backend cannot serve.
+    """
     idx = _index()
     await idx.insert([_emb("a", [1.0, 0.0, 0.0, 0.0])])
-    await idx.rebuild(IndexConfig(dimension=999, ef_search=42))
-    assert idx.config.dimension == 4  # dimension is pinned to the stored vectors
-    assert idx.config.ef_search == 42  # other knobs are adopted
+    await idx.rebuild(IndexConfig(dimension=999))
+    assert idx.config.dimension == 4  # pinned to the stored vectors, not the request
     assert {doc for doc, _ in await idx.search([1.0, 0.0, 0.0, 0.0], k=1)} == {"a"}
 
 
@@ -317,3 +330,122 @@ async def test_loaded_index_supports_further_rebuild(tmp_path: Path) -> None:
     loaded = FaissVectorIndex.load("products", tmp_path / "vec")
     await loaded.rebuild()
     assert (await loaded.get_stats()).tombstone_count == 0
+
+
+# -- an option this backend cannot honour is REFUSED, never silently dropped ------------
+#
+# ``IndexConfig`` is shared-libs' type and is deliberately wide: its own docstring says a
+# backend "is free to honour or ignore" the HNSW knobs. Ignoring them silently is what
+# these tests forbid HERE. A caller who sets ``distance_metric="l2"`` and gets inner
+# product back has no signal that they were overruled — they get confidently wrong
+# numbers. Every assertion below drives the refusal, not the stored attribute.
+
+
+async def test_construction_accepts_the_metric_this_backend_implements() -> None:
+    """Guard against over-refusing: the one honoured metric must still build and search."""
+    idx = FaissVectorIndex("products", IndexConfig(dimension=4, distance_metric="cosine"))
+    await idx.insert([_emb("a", [1.0, 0.0, 0.0, 0.0])])
+    results = await idx.search([1.0, 0.0, 0.0, 0.0], k=1)
+    assert [doc for doc, _ in results] == ["a"]
+    assert results[0][1] == pytest.approx(0.0, abs=1e-6)  # cosine distance, as advertised
+
+
+@pytest.mark.parametrize("metric", ["l2", "inner_product"])
+async def test_construction_refuses_a_distance_metric_it_does_not_implement(
+    metric: str,
+) -> None:
+    with pytest.raises(UnsupportedIndexOptionError, match="distance_metric"):
+        FaissVectorIndex("products", IndexConfig(dimension=4, distance_metric=metric))  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("knob", "value"), [("m", 64), ("ef_construction", 400), ("ef_search", 42)]
+)
+async def test_construction_refuses_a_tuned_graph_knob(knob: str, value: int) -> None:
+    """A changed HNSW knob is a request this flat index cannot serve, so it refuses."""
+    with pytest.raises(UnsupportedIndexOptionError, match=knob):
+        FaissVectorIndex("products", IndexConfig(dimension=4, **{knob: value}))
+
+
+async def test_construction_accepts_graph_knobs_left_at_their_defaults() -> None:
+    """A default value asks for nothing, so passing it explicitly must not refuse."""
+    defaults = IndexConfig()
+    idx = FaissVectorIndex(
+        "products",
+        IndexConfig(
+            dimension=4,
+            m=defaults.m,
+            ef_construction=defaults.ef_construction,
+            ef_search=defaults.ef_search,
+        ),
+    )
+    await idx.insert([_emb("a", [1.0, 0.0, 0.0, 0.0])])
+    assert [doc for doc, _ in await idx.search([1.0, 0.0, 0.0, 0.0], k=1)] == ["a"]
+
+
+async def test_rebuild_refuses_a_tuned_graph_knob_and_changes_nothing() -> None:
+    idx = _index()
+    await idx.insert([_emb("a", [1.0, 0.0, 0.0, 0.0])])
+    with pytest.raises(UnsupportedIndexOptionError, match="ef_search"):
+        await idx.rebuild(IndexConfig(dimension=4, ef_search=42))
+    assert idx.config.ef_search == IndexConfig().ef_search  # the refusal adopted nothing
+    assert [doc for doc, _ in await idx.search([1.0, 0.0, 0.0, 0.0], k=1)] == ["a"]
+
+
+async def test_rebuild_refuses_a_distance_metric_it_does_not_implement() -> None:
+    idx = _index()
+    await idx.insert([_emb("a", [1.0, 0.0, 0.0, 0.0])])
+    with pytest.raises(UnsupportedIndexOptionError, match="distance_metric"):
+        await idx.rebuild(IndexConfig(dimension=4, distance_metric="l2"))
+    assert idx.config.distance_metric == "cosine"  # still the metric actually computed
+
+
+async def test_search_refuses_a_per_query_ef_search() -> None:
+    """The Protocol makes ``ef_search`` a search argument; this backend cannot honour it.
+
+    It was previously accepted and dropped on the floor — the parameter was not even
+    forwarded to ``_search_sync``. A caller widening the beam for a hard query got the
+    identical result set and no indication their tuning did nothing.
+    """
+    idx = _index()
+    await idx.insert([_emb("a", [1.0, 0.0, 0.0, 0.0])])
+    with pytest.raises(UnsupportedIndexOptionError, match="ef_search"):
+        await idx.search([1.0, 0.0, 0.0, 0.0], k=1, ef_search=64)
+
+
+async def test_load_refuses_a_persisted_config_it_cannot_honour(tmp_path: Path) -> None:
+    """Fail-closed on the persistence path too: a sidecar claiming ``l2`` must not reopen.
+
+    Silently reopening it as inner product is exactly the confidently-wrong-result
+    failure this change exists to remove — and a saved index outlives the process that
+    wrote it, so the refusal has to live at load, not only at construction.
+    """
+    idx = _index()
+    await idx.insert([_emb("a", [1.0, 0.0, 0.0, 0.0])])
+    idx.save(tmp_path / "vec")
+
+    state_path = tmp_path / "vec" / "state.json"
+    state = json.loads(state_path.read_text())
+    state["config"]["distance_metric"] = "l2"
+    state_path.write_text(json.dumps(state))
+
+    with pytest.raises(UnsupportedIndexOptionError, match="distance_metric"):
+        FaissVectorIndex.load("products", tmp_path / "vec")
+
+
+def test_refusal_carries_the_canonical_config_invalid_code() -> None:
+    """The refusal is coded, not just typed — it renders to RFC 9457 like every other."""
+    error = UnsupportedIndexOptionError("ef_search tunes a graph this index does not have")
+    assert errors.code_of(error) == errors.CONFIG_INVALID
+    problem = errors.problem_details_for(error, {"field": "ef_search"})
+    assert problem.type == errors.CONFIG_INVALID
+    assert problem.detail == "ef_search tunes a graph this index does not have"
+
+
+def test_refusal_is_still_a_value_error() -> None:
+    """Metadata only: every existing ``except ValueError`` around index config still fires.
+
+    The module's other fail-closed refusals (duplicate id, wrong dimension, torn sidecar)
+    are ``ValueError``s, so a caller guarding index construction already catches this one.
+    """
+    assert issubclass(UnsupportedIndexOptionError, ValueError)

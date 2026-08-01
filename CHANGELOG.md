@@ -54,6 +54,35 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
   active pointer with no counter stays undecidable — there is no counter state to roll
   back to — so a pre-sequence store remains upgradable and PEP 440 decides there.
 
+- **BREAKING: `FaissVectorIndex` now REFUSES an index option it cannot implement.**
+  It previously accepted every `IndexConfig` knob and honoured exactly one of them.
+  `distance_metric="l2"` was measured building a `faiss.IndexFlatIP`
+  (`metric_type=0`, inner product) with no error and no warning — the caller believed
+  they had configured Euclidean distance and silently got a different number.
+  `ef_search`, `m`, and `ef_construction` were stored on `self.config` and never read by
+  any code path; `search(..., ef_search=64)` was measured returning results identical to
+  `search(...)`. A wrong answer nobody can detect is worse than a refusal.
+
+  The index now raises `UnsupportedIndexOptionError` — a `ValueError` carrying the
+  canonical `config.invalid` code — on construction, `rebuild`, `load`, and `search`
+  when asked for something it does not implement. It honours `dimension` and a
+  `distance_metric` of `"cosine"` (inner product over unit-normalized vectors IS cosine
+  similarity; the returned score is `1 - similarity`, i.e. cosine distance). The HNSW
+  knobs are refused only when *changed* from their defaults, so a config that never
+  tuned them is unaffected — which is every call site in this repo, the quickstart, and
+  the README.
+
+  Chosen over implementing the knobs because `IndexConfig` is shared-libs' deliberately
+  wide pass-through type ("a backend is free to honour or ignore them"), `m` /
+  `ef_construction` / `ef_search` have no meaning on a brute-force flat index at all,
+  and an `l2` path over already-normalized vectors would fork the score conversion to
+  deliver a monotone transform of the metric that is already there. EdgeProc sits at the
+  head of the dependency spine, so a narrow honest surface beats a wide lying one.
+
+  **Migration:** if you set any of these, drop them — they never did anything. To keep a
+  saved index loadable, its `state.json` `config` must not name a metric other than
+  `cosine`.
+
 ## [0.1.5] — 2026-07-21
 
 First release published to PyPI as
