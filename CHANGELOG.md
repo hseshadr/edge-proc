@@ -4,6 +4,8 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-08-01
+
 ### Fixed
 - **Anti-rollback and anti-replay now fail CLOSED.** Both promote-time freshness guards
   could be bypassed by supplying *less* information rather than better credentials:
@@ -28,7 +30,6 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
   validly-signed bundle"): a signature proves *authorship*, never *freshness*, and a
   replayed pointer is validly signed by construction.
 
-### Fixed
 - **The README said `edge-proc` "isn't on PyPI yet" thirteen lines above `pip install
   edge-proc`.** It has been on PyPI since 2026-07-22 (0.1.5). A reader who believed the first
   line stopped there and never ran the quickstart. Install now leads with PyPI, and the
