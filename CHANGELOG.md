@@ -102,6 +102,12 @@ First release published to PyPI as
 - **Performance-claim drift guard.** A test compares the committed evidence table in
   `docs/OPERATIONS.md` against the committed budgets in `benchmarks/benchmark.py` —
   never against a benchmark run at test time, so it cannot flake on machine variance.
+- **Canonical, portable integrity failures.** Bundle-integrity exceptions now
+  carry the shared `bundle.integrity_failed` code and can be rendered as RFC
+  9457 Problem Details without changing their existing Python type or message.
+- **Evidence-backed operating contract and benchmark.** A single operations guide now
+  defines threat/privacy boundaries, recovery ownership, fixed resource limits, and a
+  repeatable offline p50/p95/RSS gate for vector search and signed bundle sync.
 
 ### Changed
 - **`edgeproc-core` now installs from PyPI.** The `[tool.uv.sources]` git pin
@@ -133,31 +139,6 @@ First release published to PyPI as
   fields; a test now fails if any field is undocumented.
 - **`CITATION.cff` version tracked into the drift test.** It had sat at `0.1.1` through
   three releases; the existing version-drift test now covers it.
-
-### Removed
-- **`EdgeProc.local_default()`** — a zero-argument constructor whose empty registry
-  refused every task, advertising a working default that could not work. Construct
-  `EdgeProc(RuntimeRegistry())` explicitly.
-- **`MemoryManager.reserved_bytes`** — a counter no production code read;
-  `MemoryBudgetExceededError` already reports available and total capacity at the only
-  moment the number matters.
-
-### Notes
-- **A `v0.1.5` tag is deliberately HELD.** `publish.yml` triggers on `v*`, and edge-proc's
-  PyPI publish must stay blocked until `edgeproc-core` (a `Requires-Dist`) is itself
-  on PyPI. Tagging is a separate, sequenced decision — not a step in finishing this work.
-
-## [0.1.5] — 2026-07-20
-
-### Added
-- **Canonical, portable integrity failures.** Bundle-integrity exceptions now
-  carry the shared `bundle.integrity_failed` code and can be rendered as RFC
-  9457 Problem Details without changing their existing Python type or message.
-- **Evidence-backed operating contract and benchmark.** A single operations guide now
-  defines threat/privacy boundaries, recovery ownership, fixed resource limits, and a
-  repeatable offline p50/p95/RSS gate for vector search and signed bundle sync.
-
-### Changed
 - **Task memory budgets fail closed at the typed boundary.** Non-positive
   `budget_memory_mb` values are rejected by `Task`; forged/unvalidated task
   instances receive an `invalid_memory_budget` failure envelope instead of
@@ -174,6 +155,14 @@ First release published to PyPI as
   actions are pinned to full commit SHAs, with a regression test that rejects moving tags.
 - **Security lock refresh.** `setuptools` is locked at 83.0.0, clearing
   PYSEC-2026-3447 reported by the exact-branch dependency audit.
+
+### Removed
+- **`EdgeProc.local_default()`** — a zero-argument constructor whose empty registry
+  refused every task, advertising a working default that could not work. Construct
+  `EdgeProc(RuntimeRegistry())` explicitly.
+- **`MemoryManager.reserved_bytes`** — a counter no production code read;
+  `MemoryBudgetExceededError` already reports available and total capacity at the only
+  moment the number matters.
 
 ## [0.1.4] — 2026-07-13
 
