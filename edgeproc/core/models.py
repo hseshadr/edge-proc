@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from edgeproc.core.settings import EdgeProcSettings
 
-type JsonValue = str | int | float | bool | None | list[JsonValue] | dict[str, JsonValue]
+type JsonValue = str | int | float | bool | list[JsonValue] | dict[str, JsonValue] | None
 """JSON-shaped payload value. Deliberately not ``Any`` — payloads stay inspectable.
 
 A PEP 695 ``type`` alias (not a plain assignment) so Pydantic resolves the
