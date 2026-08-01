@@ -1,12 +1,27 @@
 # Quickstart
 
-Goal: clone the repo, run the gate, then walk a real catalog through the full **keygen → publish → sync → route** loop. Five minutes, end-to-end.
+Goal: clone the repo, run the gate, then walk a real catalog through the full **keygen → publish → sync → route** loop.
+
+**Shape:** seven steps — one 30-line Python script (step 2) and six CLI commands. The script is
+there because persisting an index is library work; there is no `edgeproc build-index` verb.
+
+**Cost**, measured on a fresh clone into a fresh venv with cold caches (Apple Silicon, fast
+connection): about **1 minute of machine time** and about **1.0 GB of disk**.
+
+| | measured |
+|---|---|
+| `uv sync --all-extras` | 5.5 s, 75 packages, 947 MB venv (torch + FAISS dominate) |
+| `uv run poe gate` | 37 s, 309 tests |
+| step 2, first run | 43 s — the one-time `all-MiniLM-L6-v2` download is 87 MB of it |
+| steps 3–7 | 7.5 s |
+
+Budget more wall-clock on a slow link. The model download happens once; later runs reuse it.
 
 ## Prereqs
 
 - Python 3.13+
 - [`uv`](https://docs.astral.sh/uv/) (`brew install uv` or `curl -LsSf https://astral.sh/uv/install.sh | sh`)
-- About 200 MB free for the model + index (first run downloads `all-MiniLM-L6-v2` ~90 MB)
+- About 1.0 GB free: a ~950 MB venv plus an 87 MB `all-MiniLM-L6-v2` download on first run
 
 ## 1. Clone and gate
 
@@ -171,7 +186,7 @@ uv run edgeproc sync --base-url origin --cache-dir cache2 --pretty
 
 - Read [ARCHITECTURE.md](ARCHITECTURE.md) for the module map and the security model.
 - See [`examples/`](../examples/) for a registry-wired in-process version that doesn't use the CLI.
-- Browse `docs/diagrams/` if you prefer pictures.
+- Prefer pictures? [ARCHITECTURE.md](ARCHITECTURE.md) draws the same loop as three diagrams.
 
 ## Going over the wire
 

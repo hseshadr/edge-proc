@@ -10,7 +10,20 @@ The three live behind three small surfaces — `edgeproc.core`, `edgeproc.localv
 
 ## System context
 
-![system context](diagrams/system-context.svg)
+```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 460}}}%%
+flowchart TD
+    pub["Publisher — the build machine<br/>Splits the files into chunks, then signs<br/>one /latest pointer with an ed25519 key"]
+    origin["Origin — any static HTTP server or CDN<br/>Holds /latest (signed), the manifests, and the<br/>zstd-compressed chunks, each named by its sha256.<br/>No app logic: it just serves files by hash"]
+    key["Pinned public key<br/>The one thing a device must get out-of-band"]
+    dev["Device — edgeproc sync<br/>Verify the signature, diff against the local cache,<br/>fetch only the missing chunks, promote atomically"]
+    app["Your app — EdgeProc.run(Task)<br/>A deterministic router picks the runtime<br/>that owns the task and returns a ResultEnvelope"]
+
+    pub -->|"publish"| origin
+    origin -->|"HTTP / CDN"| dev
+    key -->|"verify, or fail closed"| dev
+    dev -->|"verified index on local disk"| app
+```
 
 Three parties:
 
@@ -22,15 +35,51 @@ The trust boundary is the pinned public key. Everything an attacker could swap (
 
 ## Bundle lifecycle
 
-![bundle lifecycle](diagrams/bundle-lifecycle.svg)
+```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 460}}}%%
+flowchart TD
+    keygen["1. keygen<br/>Mint an ed25519 keypair. private.key signs on the<br/>publisher; public.key is the pin a device trusts.<br/>The public key travels out-of-band"]
+    publish["2. publish<br/>Split every file under --src/ with content-defined<br/>chunking (GearCDC). Write each unique chunk once<br/>under its sha256, build a manifest, and sign<br/>a /latest version pointer"]
+    sync["3. sync<br/>Pull /latest. Verify the signature against the pinned<br/>public key, or fail closed. Diff the manifest against the<br/>local cache, fetch only the missing chunks, re-check<br/>each chunk's content hash, promote the version atomically"]
+    route["4. route<br/>A pure deterministic router picks the first registered<br/>runtime that ACCEPTs the Task. The same Task against<br/>the same registry picks the same runtime, always,<br/>and the trace replays"]
+
+    keygen -->|"private.key"| publish
+    publish -->|"HTTP / CDN / filesystem"| sync
+    sync -->|"materialized index dir"| route
+```
+
+Invariants — the security model in one screen:
+
+- Only the **pointer** is signed.
+- The **manifest** is named by the hash of its own content.
+- Each **chunk** is named by the hash of its own content.
+- Identical bytes across versions produce identical chunks, so a one-line edit re-fetches one
+  chunk, not the whole file.
+- Tamper with any chunk or manifest and it fails its content-address check.
+- Forge the pointer and it fails the signature check.
+- Both failures exit non-zero with no traceback.
 
 The four CLI verbs map one-to-one onto the four stages. `keygen` is one-time. `publish` runs on the build host whenever you cut a release. `sync` and `route` run on the device.
 
-The invariants in the diagram are the security model in one screen. The only signed object is the version pointer; everything else is verified by content hash. A tampered chunk fails its hash, a swapped manifest fails its hash, a forged pointer fails its signature — all three exit non-zero with no traceback.
-
 ## Content-addressed store and manifest
 
-![cas and manifest](diagrams/cas-and-manifest.svg)
+```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 460}}}%%
+flowchart TD
+    key["Pinned public key<br/>obtained out-of-band"]
+    latest["latest — the version pointer<br/>the only signed object in the store"]
+    m101["manifest for v1.0.1<br/>named by the sha256 of its own bytes;<br/>lists the chunks that make up each file"]
+    m100["manifest for v1.0.0<br/>the version already on the device"]
+    chunks["chunk store<br/>every unique chunk written once under its sha256,<br/>zstd-compressed. v1.0.0 and v1.0.1 share every chunk<br/>whose bytes did not change"]
+
+    key -->|"1. the ed25519 signature must verify, or stop"| latest
+    latest -->|"2. sha256 of the manifest bytes must equal<br/>the hash inside the pointer, or stop"| m101
+    m101 -->|"3. sha256 of every fetched chunk must equal<br/>the hash the manifest lists, or stop"| chunks
+    m100 -.->|"shares its unchanged chunks"| chunks
+```
+
+Those three checks are the whole verification chain, top to bottom. Any one of them failing
+aborts the sync — nothing is promoted and the process exits non-zero.
 
 Chunk-level deduplication is the reason `v1.0.0 → v1.0.1` is a delta, not a full re-download. Identical bytes across versions resolve to identical chunk hashes, so the manifest for v1.0.1 simply references the same chunks as v1.0.0 wherever the file content didn't change. A one-line edit to a 400 KB index re-fetches one chunk.
 
@@ -58,5 +107,5 @@ Roadmap seams not built in v0: a Wasmtime deterministic kernel, Biscuit capabili
 ## Reading order
 
 - New here? Start with [QUICKSTART.md](QUICKSTART.md), then come back.
-- Want the security argument in detail? Re-read the cas-and-manifest diagram, then `edgeproc/bundles/sync.py` and `edgeproc/bundles/signing.py`.
+- Want the security argument in detail? Re-read the content-addressed store diagram above, then `edgeproc/bundles/sync.py` and `edgeproc/bundles/signing.py`.
 - Adding a runtime? Read `edgeproc/core/router.py`, then `edgeproc/localvec/runtime.py` as the reference implementation.
