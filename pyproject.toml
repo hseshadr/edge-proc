@@ -101,6 +101,11 @@ ignore = ["S101", "PLR0913"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101", "PLR2004", "C901", "PLR0911", "PLR0912"]
+# Typer turns one parameter into one CLI flag, so a command with many flags has a wide
+# signature by construction. Typer only ever binds them by keyword, so the positional-arg
+# footgun PLR0917 warns about cannot happen here. Scoped to the CLI so the rule still
+# guards the rest of the package.
+"edgeproc/cli/*" = ["PLR0917"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 5
