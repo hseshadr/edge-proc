@@ -4,6 +4,13 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-08-03
+
+A dependency-metadata release, and it only matters once published. The floor
+fixed on `main` reaches nobody: PyPI 0.3.0 still advertises `cryptography>=44`
+to every installer, so a fresh `pip install edge-proc[bundles]` resolves to a
+version affected by all three advisories below. No API change.
+
 ### Security
 - **Raised the `cryptography` floor to `>=50` (was `>=44`).** `cryptography` is the library
   that performs edge-proc's fail-closed signature verification, so its floor is inherited by
