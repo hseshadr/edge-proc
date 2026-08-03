@@ -4,6 +4,31 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
 
 ## [Unreleased]
 
+### Security
+- **Raised the `cryptography` floor to `>=50` (was `>=44`).** `cryptography` is the library
+  that performs edge-proc's fail-closed signature verification, so its floor is inherited by
+  every project that installs edge-proc. Three advisories landed against it:
+
+  | Advisory | Severity | Affected | First fixed |
+  | --- | --- | --- | --- |
+  | [CVE-2026-69247](https://github.com/advisories/GHSA-g6cj-pr64-35w5) — PKCS#7 `EnvelopedData` decryption leaks a Bleichenbacher oracle through distinguishable errors and timing | High (8.2) | `>=44.0.0, <50.0.0` | **50.0.0** |
+  | [CVE-2026-69248](https://github.com/advisories/GHSA-m2h6-j472-rp4c) — X.509 verifier accepts a wildcard SAN escaping an intermediate's `permittedSubtrees` | Moderate (6.9) | `<=48.0.0` | 49.0.0 |
+  | [CVE-2026-69249](https://github.com/advisories/GHSA-jwv3-5hgf-82ww) — duplicate self-signed intermediates cause exponential path building (DoS) | High (8.7) | `<=48.0.0` | 49.0.0 |
+
+  `>=44` resolved onto all three; 49.0.0 clears only the last two, so the floor is 50.
+
+  **edge-proc itself is not on any of the three affected code paths.** It uses raw ed25519
+  (`Ed25519PrivateKey` / `Ed25519PublicKey` and `InvalidSignature`) and imports nothing else
+  from `cryptography` — no `pkcs7_decrypt_*`, no `x509.verification`, no certificate path
+  building. All three advisories are confined to PKCS#7 decryption and X.509 chain
+  verification. The floor is raised regardless: a project that installs edge-proc may reach
+  for those surfaces itself, and a dependency's floor is the weakest version it permits, not
+  the version it happens to resolve today.
+
+  **Floor only — deliberately no ceiling.** A cap on a security-critical dependency turns the
+  next major-delivered CVE fix into a blocked build. Guarded by
+  `tests/test_dependency_floors.py`, which fails on a lowered floor *and* on any added cap.
+
 ## [0.3.0] — 2026-08-03
 
 A security release. Two anti-rollback paths accepted a promote they could not prove
