@@ -4,6 +4,13 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-08-03
+
+A security release. Two anti-rollback paths accepted a promote they could not prove
+was fresh, and one of them is reachable by replaying a genuinely-signed pointer — no
+forgery required. **Breaking:** a publisher re-shipping under one version label now
+needs a strictly-greater `--sequence`.
+
 ### Fixed
 - **Anti-replay failed OPEN on an EQUAL version — a promote now needs a *strictly greater*
   one.** `Version(incoming) < Version(active)` is `False` when the two versions are equal,
