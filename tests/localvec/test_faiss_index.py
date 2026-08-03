@@ -256,6 +256,44 @@ async def test_save_serializes_with_rebuild_and_load_rejects_crash_mismatch(
         FaissVectorIndex.load("products", tmp_path / "vec")
 
 
+async def test_load_rejects_a_dimension_mismatch_against_the_state_sidecar(
+    tmp_path: Path,
+) -> None:
+    # The saved FAISS binary is built for dimension 4. A sidecar hand-edited (or torn
+    # by a crash) to claim a different dimension must not reopen: every vector op
+    # after would be shaped wrong with nothing to say so.
+    idx = _index()
+    await idx.insert([_emb("a", [1.0, 0.0, 0.0, 0.0])])
+    idx.save(tmp_path / "vec")
+
+    state_path = tmp_path / "vec" / "state.json"
+    state = json.loads(state_path.read_text())
+    state["config"]["dimension"] = 8
+    state_path.write_text(json.dumps(state))
+
+    with pytest.raises(ValueError, match="dimension does not match"):
+        FaissVectorIndex.load("products", tmp_path / "vec")
+
+
+async def test_load_rejects_metadata_ids_that_do_not_match_live_state(
+    tmp_path: Path,
+) -> None:
+    # The metadata map must exactly cover the live (non-tombstoned) ids. A sidecar
+    # carrying a metadata entry for an id nothing else knows about is torn — reopening
+    # it anyway would let a filtered search silently reference a ghost entity.
+    idx = _index()
+    await idx.insert([_emb("a", [1.0, 0.0, 0.0, 0.0])])
+    idx.save(tmp_path / "vec")
+
+    state_path = tmp_path / "vec" / "state.json"
+    state = json.loads(state_path.read_text())
+    state["meta"]["ghost"] = {}
+    state_path.write_text(json.dumps(state))
+
+    with pytest.raises(ValueError, match="metadata IDs"):
+        FaissVectorIndex.load("products", tmp_path / "vec")
+
+
 async def test_insert_duplicate_id_fails_closed() -> None:
     idx = _index()
     await idx.insert([_emb("a", [1.0, 0.0, 0.0, 0.0])])

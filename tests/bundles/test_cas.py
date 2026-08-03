@@ -48,8 +48,15 @@ def _store(tmp_path: Path) -> FilesystemCacheStore:
     return FilesystemCacheStore(tmp_path)
 
 
-def _manifest_for(store: FilesystemCacheStore, *payloads: bytes) -> IndexManifest:
-    """Store ``payloads`` as chunks and return a manifest of one file over them."""
+def _manifest_for(
+    store: FilesystemCacheStore, *payloads: bytes, version: str = "1.0.0"
+) -> IndexManifest:
+    """Store ``payloads`` as chunks and return a manifest of one file over them.
+
+    ``version`` is explicit because ``promote`` requires a strictly-greater version (or a
+    strictly-greater ``sequence``) to replace an active pointer: a test that promotes twice
+    must move the version forward, exactly as a real publisher does.
+    """
     refs = [ChunkRef(hash=store.put_chunk(p), size=len(p)) for p in payloads]
     blob = b"".join(payloads)
     entry = FileEntry(
@@ -59,7 +66,7 @@ def _manifest_for(store: FilesystemCacheStore, *payloads: bytes) -> IndexManifes
         file_sha256=_chunk_hash(blob),
         chunks=refs,
     )
-    return IndexManifest(bundle_id="b", version="1.0.0", files=[entry])
+    return IndexManifest(bundle_id="b", version=version, files=[entry])
 
 
 def _promote_manifest(store: FilesystemCacheStore, manifest: IndexManifest) -> VersionPointer:
@@ -200,10 +207,10 @@ def test_manifest_round_trip_and_fail_closed(tmp_path: Path) -> None:
 def test_promote_and_read_active_swaps_to_newest(tmp_path: Path) -> None:
     store = _store(tmp_path)
     assert store.read_active() is None
-    m1 = _manifest_for(store, b"v1" * 16)
+    m1 = _manifest_for(store, b"v1" * 16, version="1.0.0")
     p1 = _promote_manifest(store, m1)
     assert store.read_active() == p1
-    m2 = _manifest_for(store, b"v2" * 16)
+    m2 = _manifest_for(store, b"v2" * 16, version="1.0.1")
     p2 = _promote_manifest(store, m2)
     assert store.read_active() == p2
 
@@ -226,9 +233,18 @@ def test_promote_refuses_rollback_to_older_version(tmp_path: Path) -> None:
     assert store.read_active() == new_pointer  # the downgrade never took effect
 
 
-def test_promote_allows_equal_and_forward_versions(tmp_path: Path) -> None:
-    # The guard must reject ONLY a provable downgrade: an equal-version re-publish and a
-    # forward bump are both legitimate and must still promote (covenant: never reject valid).
+def test_promote_refuses_an_equal_version_and_allows_a_forward_bump(tmp_path: Path) -> None:
+    # Only a STRICTLY GREATER version proves freshness. An equal version is a different
+    # bundle wearing the same label, and nothing in it says which of the two is newer — so
+    # it is refused, while a forward bump still promotes.
+    #
+    # CONTRACT REVERSED 2026-08-03. This test asserted the exact opposite until then
+    # ("equal version, different content → allowed"), reading `Version(a) < Version(b)`
+    # returning False as affirmative proof of freshness. That is how any earlier,
+    # genuinely-signed pointer at the same version replaced the installed one. A replayed
+    # artifact IS validly signed, so "cannot tell" must REJECT, not accept. An equal-version
+    # re-publish keeps shipping by binding a strictly-greater monotonic `sequence` — see
+    # tests/bundles/test_fail_closed_freshness.py for the attack and that escape hatch.
     store = _store(tmp_path)
     same_a = _manifest_for(store, b"a" * 16)
     same_b = _manifest_for(store, b"b" * 16)
@@ -243,8 +259,9 @@ def test_promote_allows_equal_and_forward_versions(tmp_path: Path) -> None:
         manifest_hash=store.put_manifest(canonical_bytes(forward)), version="1.0.1", signature="s"
     )
     store.promote(p_a)
-    store.promote(p_b)  # equal version, different content → allowed
-    assert store.read_active() == p_b
+    with pytest.raises(RollbackError):
+        store.promote(p_b)  # equal version, different content → REFUSED
+    assert store.read_active() == p_a  # the unproven swap never took effect
     store.promote(p_c)  # forward bump → allowed
     assert store.read_active() == p_c
 
@@ -276,6 +293,44 @@ def test_promote_refuses_a_version_pep440_cannot_compare(tmp_path: Path) -> None
     assert store.read_active() == active_ptr
 
 
+def test_promote_refuses_an_empty_version_string(tmp_path: Path) -> None:
+    # The degenerate end of "unparseable": `version` is required by the schema, so it can
+    # never be absent, but it CAN be empty. `Version("")` proves nothing, so it is refused.
+    store = _store(tmp_path)
+    active_ptr = VersionPointer(manifest_hash="ab" * 32, version="2.0.0", signature="s")
+    blank_ptr = VersionPointer(manifest_hash="cd" * 32, version="", signature="s")
+    store.promote(active_ptr)
+    with pytest.raises(RollbackError):
+        store.promote(blank_ptr)
+    assert store.read_active() == active_ptr
+
+
+def test_promote_refuses_when_the_active_pointer_cannot_be_read(tmp_path: Path) -> None:
+    # The anti-rollback guard's INPUT is the active pointer. An `active` that exists but is
+    # malformed must refuse the promote as a catalogued IntegrityError — not leak a raw
+    # pydantic ValidationError past every `except IntegrityError` fail-closed handler.
+    store = _store(tmp_path)
+    store.promote(VersionPointer(manifest_hash="ab" * 32, version="2.0.0", signature="s"))
+    (tmp_path / "active").write_bytes(b"{not json")
+
+    with pytest.raises(IntegrityError):
+        store.promote(VersionPointer(manifest_hash="cd" * 32, version="0.0.1", signature="s"))
+    assert (tmp_path / "active").read_bytes() == b"{not json"  # the swap never happened
+
+
+def test_promote_refuses_when_active_exists_but_is_not_a_file(tmp_path: Path) -> None:
+    # `is_file()` answered False for an `active` that EXISTS as a directory, so read_active
+    # returned None and the anti-rollback guard was skipped entirely — the only thing that
+    # then stopped the promote was os.replace failing. A refusal must come from the guard.
+    store = _store(tmp_path)
+    store.promote(VersionPointer(manifest_hash="ab" * 32, version="2.0.0", signature="s"))
+    (tmp_path / "active").unlink()
+    (tmp_path / "active").mkdir()
+
+    with pytest.raises(IntegrityError):
+        store.promote(VersionPointer(manifest_hash="cd" * 32, version="0.0.1", signature="s"))
+
+
 def test_first_promote_needs_no_freshness_proof(tmp_path: Path) -> None:
     # Nothing is active yet, so there is nothing to be fresher THAN: the first promote of
     # an unparseable version is accepted. Fail-closed applies to replacing trusted state.
@@ -294,11 +349,11 @@ def test_promote_crash_safety_keeps_old_pointer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store = _store(tmp_path)
-    m1 = _manifest_for(store, b"v1" * 16)
+    m1 = _manifest_for(store, b"v1" * 16, version="1.0.0")
     p1 = _promote_manifest(store, m1)
     # Stage v2 fully (chunks + manifest) BEFORE the simulated crash — only the
     # active-pointer swap should fail, exactly as a real crash mid-promote would.
-    m2 = _manifest_for(store, b"v2" * 16)
+    m2 = _manifest_for(store, b"v2" * 16, version="1.0.1")
     digest2 = store.put_manifest(canonical_bytes(m2))
     p2 = VersionPointer(manifest_hash=digest2, version=m2.version, signature="sig")
 

@@ -174,10 +174,15 @@ def test_promote_agrees_with_the_public_freshness_predicate(
 
     Equal counters are excluded because promotion deliberately adds idempotence on top of
     strict freshness — that divergence is asserted by the two tests directly above.
+
+    The incoming version is a FORWARD bump so this isolates the counter rule. Both sides
+    sat at ``1.0.0`` until 2026-08-03, when an equal version was proof of freshness — so
+    the ``(5, None)`` case only passed because of the hole this file exists to close.
+    A stale counter must still refuse under a forward version, and it does: ``(3, 5)``.
     """
     store = FilesystemCacheStore(tmp_path)
     active_pointer = _make_pointer(store, b"active", version="1.0.0", sequence=active)
-    incoming_pointer = _make_pointer(store, b"incoming", version="1.0.0", sequence=incoming)
+    incoming_pointer = _make_pointer(store, b"incoming", version="1.0.1", sequence=incoming)
     store.promote(active_pointer)
 
     fresh = is_fresh_sequence(incoming_pointer, active_pointer)

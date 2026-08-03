@@ -22,7 +22,14 @@ import zstandard
 from edgeproc.bundles.adapters import FilesystemAdapter, HttpAdapter
 from edgeproc.bundles.cas import FilesystemCacheStore, IntegrityError
 from edgeproc.bundles.chunking import GearCDC
-from edgeproc.bundles.manifest import IndexManifest, VersionPointer
+from edgeproc.bundles.manifest import (
+    IndexManifest,
+    VersionPointer,
+    canonical_bytes,
+    manifest_digest,
+    pointer_signing_bytes,
+)
+from edgeproc.bundles.publish import build_bundle
 from edgeproc.bundles.signing import (
     Ed25519Signer,
     Ed25519Verifier,
@@ -155,6 +162,100 @@ def test_fail_closed_on_bad_pointer_signature(tmp_path: Path) -> None:
     assert store.read_active() is None  # bad version was NOT promoted
 
 
+def test_sync_rejects_pointer_bound_to_a_different_channel(tmp_path: Path) -> None:
+    """A device pinned to channel "stable" must refuse a validly signed "beta" pointer.
+
+    One signing key can publish a beta and a stable channel of the same bundle. A
+    misrouted mirror (or an attacker) serving the beta pointer to a stable-pinned
+    device must not have it accepted just because the signature checks out.
+    """
+    private, public = generate_keypair()
+    origin = tmp_path / "origin"
+    build_bundle(
+        files=_FILES,
+        store=FilesystemCacheStore(origin),
+        chunker=GearCDC(),
+        signer=Ed25519Signer(private),
+        bundle_id="b",
+        version="1.0.0",
+        channel="beta",
+    )
+    verifier = _verifier(public.public_bytes_raw())
+    store = FilesystemCacheStore(tmp_path / "cache")
+
+    with pytest.raises(IntegrityError):
+        sync_index(
+            base_url=str(origin),
+            store=store,
+            adapter=FilesystemAdapter(),
+            verifier=verifier,
+            expected_channel="stable",
+        )
+    assert store.read_active() is None  # the beta pointer was NOT promoted
+
+
+def test_fail_closed_on_corrupted_manifest(tmp_path: Path) -> None:
+    origin, pointer, verifier = _setup(tmp_path, _FILES)
+    store = FilesystemCacheStore(tmp_path / "cache")
+    # A corrupt or tampering origin serves manifest bytes that don't hash to the
+    # pointer's manifest_hash; /latest itself is untouched and still verifies fine.
+    manifest_path = origin / "manifest" / pointer.manifest_hash
+    manifest_path.write_bytes(manifest_path.read_bytes() + b"corrupted")
+
+    with pytest.raises(IntegrityError):
+        sync_index(
+            base_url=str(origin), store=store, adapter=FilesystemAdapter(), verifier=verifier
+        )
+    assert store.read_active() is None  # bad version was NOT promoted
+
+
+def test_fail_closed_on_manifest_lying_about_a_files_hash(tmp_path: Path) -> None:
+    """A manifest whose declared file hash is wrong must be refused, even with real chunks.
+
+    Every chunk here is genuine and content-addresses fine on its own — only the
+    manifest's claim about what they reassemble to is a lie (a forged manifest signed
+    under the same key). The per-chunk CAS check can't catch this; only the file-level
+    reassembly check that runs during sync does.
+    """
+    private, public = generate_keypair()
+    signer = Ed25519Signer(private)
+    verifier = _verifier(public.public_bytes_raw())
+    origin = tmp_path / "origin"
+    _producer.build_origin(files=_FILES, origin=origin, chunker=GearCDC(), signer=signer)
+    _forge_manifest_file_hash(origin, signer, path="norm.json")
+    store = FilesystemCacheStore(tmp_path / "cache")
+
+    with pytest.raises(IntegrityError):
+        sync_index(
+            base_url=str(origin), store=store, adapter=FilesystemAdapter(), verifier=verifier
+        )
+    assert store.read_active() is None  # bad version was NOT promoted
+
+
+def _forge_manifest_file_hash(origin: Path, signer: Ed25519Signer, *, path: str) -> None:
+    """Rewrite the manifest so ONE file's declared hash is wrong, re-signing a matching pointer.
+
+    The chunks referenced are untouched real chunks; only the manifest's claim about what
+    they reassemble to changes — the same trust gap a compromised producer or a malicious
+    mirror would exploit.
+    """
+    pointer = VersionPointer.model_validate_json((origin / "latest").read_bytes())
+    manifest = IndexManifest.model_validate_json(
+        (origin / "manifest" / pointer.manifest_hash).read_bytes()
+    )
+    entries = [
+        entry.model_copy(update={"file_sha256": "00" * 32}) if entry.path == path else entry
+        for entry in manifest.files
+    ]
+    forged_manifest = manifest.model_copy(update={"files": entries})
+    forged_hash = manifest_digest(forged_manifest)
+    (origin / "manifest" / forged_hash).write_bytes(canonical_bytes(forged_manifest))
+    unsigned = pointer.model_copy(update={"manifest_hash": forged_hash, "signature": ""})
+    signature = signer.sign(pointer_signing_bytes(unsigned))
+    forged_pointer = unsigned.model_copy(update={"signature": signature})
+    (origin / "latest").write_bytes(forged_pointer.model_dump_json().encode("utf-8"))
+
+
 def test_fail_closed_on_corrupted_chunk(tmp_path: Path) -> None:
     origin, pointer, verifier = _setup(tmp_path, _FILES)
     store = FilesystemCacheStore(tmp_path / "cache")
@@ -235,3 +336,23 @@ def test_materialize_file_refuses_files_over_memory_cap(
 
     with pytest.raises(SyncCapError, match="materialize"):
         materialize_file(store, _manifest_at(origin, pointer), "index.faiss")
+
+
+def test_materialize_file_fail_closed_on_manifest_lying_about_hash(tmp_path: Path) -> None:
+    """A manifest entry claiming the wrong sha256 for a file must refuse materialize_file.
+
+    The chunks are real and correctly stored; only the manifest's claim about what they
+    reassemble to is a lie — e.g. a hand-edited or corrupted local manifest copy.
+    """
+    origin, pointer, verifier = _setup(tmp_path, _FILES)
+    store = FilesystemCacheStore(tmp_path / "cache")
+    sync_index(base_url=str(origin), store=store, adapter=FilesystemAdapter(), verifier=verifier)
+    manifest = _manifest_at(origin, pointer)
+    entries = [
+        entry.model_copy(update={"file_sha256": "ff" * 32}) if entry.path == "norm.json" else entry
+        for entry in manifest.files
+    ]
+    lying_manifest = manifest.model_copy(update={"files": entries})
+
+    with pytest.raises(IntegrityError):
+        materialize_file(store, lying_manifest, "norm.json")

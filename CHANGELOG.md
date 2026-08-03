@@ -4,6 +4,37 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
 
 ## [Unreleased]
 
+### Fixed
+- **Anti-replay failed OPEN on an EQUAL version — a promote now needs a *strictly greater*
+  one.** `Version(incoming) < Version(active)` is `False` when the two versions are equal,
+  and the guard read that single `False` as affirmative proof of freshness. Two different
+  bundles can wear one version label, so an equal version says nothing about which is
+  newer. Measured before the fix: a device on the re-published `1.2.0` bundle accepted the
+  earlier, genuinely signed `1.2.0` pointer, and its content moved backwards under an
+  unchanged version string. Nothing was forged — a replayed pointer is validly signed by
+  construction, so "I cannot tell whether this is a rollback" must REJECT.
+
+  **Breaking, and deliberately so.** A publisher that re-ships under one version label now
+  needs a strictly-greater monotonic `sequence` (`--sequence`) to prove freshness.
+  `sequence` was already the documented escape hatch for versions PEP 440 cannot parse; it
+  is now the escape hatch for equal versions too. A first promote, a forward version bump,
+  and a byte-identical re-promote (idempotent no-op) are all unaffected. `RollbackError`'s
+  message now names *strictly greater* as the bar.
+
+- **An unreadable `active` pointer skipped the anti-rollback guard entirely.**
+  `read_active` tested `is_file()`, so an `active` that existed but was not a regular file
+  answered "nothing has ever been promoted" — the one answer that tells the guard it has
+  nothing to be fresher than. The promote then needed no proof at all, and the only thing
+  that stopped it was the filesystem refusing the swap. An `active` that exists but cannot
+  be read as a pointer is now a catalogued `IntegrityError` (`bundle.integrity_failed`)
+  rather than a raw pydantic `ValidationError` escaping every `except IntegrityError`
+  fail-closed handler. `None` is reserved for a store with no `active` entry at all.
+
+### Added
+- Tests for nine previously unwitnessed refusal branches — `raise` paths no test had ever
+  executed, across the sync engine, the memory admission guard, and the persisted FAISS
+  index validator.
+
 ## [0.2.0] — 2026-08-01
 
 ### Fixed

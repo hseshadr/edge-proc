@@ -90,3 +90,21 @@ def test_sync_under_generous_caps_succeeds(tmp_path: Path) -> None:
     )
     assert result.version == "1.0.0"
     assert result.bytes_fetched > 0
+
+
+def test_sync_refuses_a_file_over_the_materialize_cap_during_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file bigger than the materialize memory cap must be refused DURING sync.
+
+    The reassembly check that guards this cap runs BEFORE promote, so a manifest
+    declaring a file over the cap (a runaway or malicious producer) never becomes the
+    active pointer — the refusal fires at verify time, not later at materialize_file.
+    """
+    base_url, verifier = _origin(tmp_path)
+    monkeypatch.setenv("EDGEPROC_MAX_MATERIALIZE_BYTES", "1024")
+    store = FilesystemCacheStore(tmp_path / "cache")
+
+    with pytest.raises(SyncCapError, match="materialize"):
+        sync_index(base_url=base_url, store=store, adapter=FilesystemAdapter(), verifier=verifier)
+    assert store.read_active() is None
