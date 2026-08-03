@@ -1,6 +1,6 @@
 """Freshness must be PROVED at promote — an unprovable pointer is refused, not waved through.
 
-Two fail-OPEN defects this module pins closed. Each is driven as the real attack through
+Three fail-OPEN defects this module pins closed. Each is driven as the real attack through
 the real code path (``build_bundle`` -> ``sync_index`` -> ``promote``) and asserts the
 attack is REFUSED — never that a predicate returned ``False`` in isolation:
 
@@ -12,10 +12,15 @@ attack is REFUSED — never that a predicate returned ``False`` in isolation:
   a validly signed older pointer carrying no sequence at all: the counter comparison
   answered "fresh" whenever *either* side was ``None``, so deleting the freshness evidence
   was enough to defeat the guard that evidence exists to power.
+- **Anti-replay bypassed by an EQUAL version.** ``Version(a) < Version(b)`` is ``False``
+  when the two are equal, and the guard read that single ``False`` as affirmative PROOF of
+  freshness. So a publisher that ships two bundles under one label — and every publisher
+  that carries no monotonic counter at all — had NO anti-replay: any earlier, genuinely
+  signed pointer at the same version replaced the installed one and moved content backwards.
 
-The rule both now obey: a promote must PROVE it is at least as fresh as the active pointer
-— by a strictly-greater monotonic ``sequence``, or by a comparable PEP 440 ``version``.
-No proof is a refusal.
+The rule all three now obey: a promote must PROVE it is at least as fresh as the active
+pointer — by a strictly-greater monotonic ``sequence``, or by a strictly-greater PEP 440
+``version``. No proof is a refusal. "I cannot tell whether this is a rollback" REJECTS.
 """
 
 from __future__ import annotations
@@ -161,7 +166,95 @@ def test_promote_refuses_an_absent_sequence_against_a_sequenced_active(tmp_path:
     assert store.read_active() == active
 
 
+# --- attack 3: replay of a validly-signed pointer at an EQUAL version ------------------
+
+
+def test_sync_refuses_a_replayed_pointer_at_an_equal_version(tmp_path: Path) -> None:
+    """A device on v1.2.0 must refuse an EARLIER, genuinely signed pointer also at v1.2.0.
+
+    The realistic shape: a publisher ships v1.2.0, finds a defect, and re-publishes the
+    fix under the SAME label (no counter — ``sequence`` is optional and most publishers
+    carry none). Both pointers are validly signed; the attacker forges nothing and only
+    replays the first ``/latest`` from a stale mirror or a poisoned CDN edge.
+
+    ``Version("1.2.0") < Version("1.2.0")`` is ``False``, and the guard read that single
+    ``False`` as proof of freshness — so the replay promoted and the device's content
+    silently moved BACKWARDS to the defective bundle under an unchanged version string.
+    An equal version proves nothing about which bundle is newer. It must REJECT.
+    """
+    # Given: a device already running the re-published (fixed) v1.2.0 bundle
+    publisher = _Publisher()
+    stale_origin, fixed_origin, cache = (tmp_path / n for n in ("stale", "fixed", "cache"))
+    publisher.publish(stale_origin, version="1.2.0", files=_OLD_FILES)
+    current = publisher.publish(fixed_origin, version="1.2.0", files=_NEW_FILES)
+    publisher.sync(fixed_origin, cache)
+    assert _active(cache).manifest_hash == current.manifest_hash
+
+    # When: the attacker replays the earlier, genuinely signed v1.2.0 pointer
+    with pytest.raises(RollbackError):
+        publisher.sync(stale_origin, cache)
+
+    # Then: the content did not move backwards
+    assert _active(cache) == current
+    assert _active(cache).manifest_hash == current.manifest_hash
+
+
+def test_promote_refuses_an_equal_version_it_cannot_prove_fresher(tmp_path: Path) -> None:
+    """The same refusal at the store boundary, independent of the sync engine."""
+    # Given
+    store = FilesystemCacheStore(tmp_path)
+    active = VersionPointer(manifest_hash="ab" * 32, version="1.2.0", signature="s")
+    replay = VersionPointer(manifest_hash="cd" * 32, version="1.2.0", signature="s")
+    store.promote(active)
+
+    # When / Then
+    with pytest.raises(RollbackError):
+        store.promote(replay)
+    assert store.read_active() == active
+
+
 # --- the escape hatch the fail-closed rule must leave open -----------------------------
+
+
+def test_re_promoting_the_identical_pointer_is_idempotent(tmp_path: Path) -> None:
+    """Equal versions refuse a DIFFERENT pointer, never the byte-identical one.
+
+    An interrupted sync that re-runs promotes the same pointer again. That is a no-op
+    write, not equivocation, so it needs no freshness proof and must keep working.
+    """
+    # Given
+    store = FilesystemCacheStore(tmp_path)
+    pointer = VersionPointer(manifest_hash="ab" * 32, version="1.2.0", signature="s")
+
+    # When
+    store.promote(pointer)
+    store.promote(pointer)
+
+    # Then
+    assert store.read_active() == pointer
+
+
+def test_a_monotonic_sequence_still_ships_an_equal_version_republish(tmp_path: Path) -> None:
+    """Fail-closed must not brick a publisher that re-ships under one label — ``sequence`` is.
+
+    The no-regression half of the fix: an equal-version re-publish keeps shipping by
+    binding a strictly-greater counter, and replaying the lower counter is still refused.
+    """
+    # Given: two bundles at the SAME version that DO carry monotonic counters
+    publisher = _Publisher()
+    first_origin, second_origin, cache = (tmp_path / n for n in ("first", "second", "cache"))
+    publisher.publish(first_origin, version="1.2.0", files=_OLD_FILES, sequence=1)
+    second = publisher.publish(second_origin, version="1.2.0", files=_NEW_FILES, sequence=2)
+
+    # When: the device syncs both in order
+    publisher.sync(first_origin, cache)
+    publisher.sync(second_origin, cache)
+
+    # Then: the equal-version forward move landed, and replaying the lower counter is refused
+    assert _active(cache) == second
+    with pytest.raises(RollbackError):
+        publisher.sync(first_origin, cache)
+    assert _active(cache) == second
 
 
 def test_a_monotonic_sequence_still_ships_date_versioned_bundles(tmp_path: Path) -> None:

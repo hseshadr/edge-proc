@@ -49,3 +49,14 @@ def test_reservation_rejects_non_positive_bytes() -> None:
 
     with pytest.raises(ValueError, match="positive"):
         manager.reserve(0)
+
+
+def test_construction_rejects_zero_capacity() -> None:
+    # A manager that admits nothing but never says so would hang every caller.
+    with pytest.raises(ValueError, match="capacity must be positive"):
+        MemoryManager(max_bytes=0)
+
+
+def test_construction_rejects_negative_capacity() -> None:
+    with pytest.raises(ValueError, match="capacity must be positive"):
+        MemoryManager(max_bytes=-1)

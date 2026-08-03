@@ -84,3 +84,24 @@ def test_explicit_args_override_settings(monkeypatch: pytest.MonkeyPatch) -> Non
     TextEncoder(model_name="custom/model", token="explicit_token")  # noqa: S106 - test token
     assert _FakeModel.last_model_name == "custom/model"
     assert _FakeModel.last_token == "explicit_token"  # noqa: S105 - test token, not a secret
+
+
+class _FakeModelWithNoDimension:
+    """Stand-in for a model that cannot report its own embedding dimension."""
+
+    def __init__(self, model_name: str, token: str | None = None) -> None:
+        pass
+
+    def get_embedding_dimension(self) -> int | None:
+        return None
+
+
+def test_dim_raises_when_model_exposes_no_embedding_dimension(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A model that cannot report its dimension must not silently hand one back: the
+    # caller would build a FAISS index of the wrong size and have no signal why.
+    monkeypatch.setattr("edgeproc.localvec.encoder.SentenceTransformer", _FakeModelWithNoDimension)
+    encoder = TextEncoder()
+    with pytest.raises(RuntimeError, match="no embedding dimension"):
+        _ = encoder.dim

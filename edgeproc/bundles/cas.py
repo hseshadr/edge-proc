@@ -13,9 +13,10 @@ pinned and fail-closed by construction:
   pointer or the NEW one, never a torn/empty ``active``. (Pinned: not
   ``renameat2``, not symlinks.)
 - **Proved-fresher promote** — replacing the active pointer requires PROOF that the
-  incoming one is at least as fresh: a strictly-greater monotonic ``sequence``, or a
-  comparable PEP 440 ``version``. If neither comparison can speak — an unparseable
-  version and no counter — the promote is refused. Absence of disproof is not proof.
+  incoming one is fresher: a strictly-greater monotonic ``sequence``, or a strictly-greater
+  PEP 440 ``version``. If neither comparison can speak — an equal or unparseable version
+  and no counter — the promote is refused. Absence of disproof is not proof. (Re-promoting
+  the byte-identical active pointer is a no-op write, so it needs no proof.)
 - **Mark-sweep GC** — the reachable set is the active manifest plus every chunk
   it references; everything else is swept. With nothing promoted, ``gc`` is a
   fail-safe no-op (returning 0), never a wipe.
@@ -38,6 +39,7 @@ from typing import ClassVar, Final, Protocol, runtime_checkable
 import zstandard
 from filelock import FileLock, Timeout
 from packaging.version import InvalidVersion, Version
+from pydantic import ValidationError
 
 from edgeproc.bundles.containment import UnsafePathError, resolve_within
 from edgeproc.bundles.manifest import (
@@ -234,10 +236,17 @@ class FilesystemCacheStore:
         return raw
 
     def read_active(self) -> VersionPointer | None:
+        """The active pointer, or ``None`` only when nothing has ever been promoted.
+
+        ``None`` is the anti-rollback guard's "nothing to be fresher than" signal, so it is
+        reserved for a store with NO ``active`` entry. An ``active`` that exists but cannot
+        be read is a catalogued refusal — answering "nothing is active" there would SKIP
+        the guard and let any pointer promote without proof.
+        """
         active = self._store_path("active")
-        if not active.is_file():
+        if not active.exists():
             return None
-        return VersionPointer.model_validate_json(active.read_bytes())
+        return _parse_active(active)
 
     @contextmanager
     def mutation(self) -> Iterator[None]:
@@ -304,6 +313,20 @@ class FilesystemCacheStore:
         return removed
 
 
+def _parse_active(active: Path) -> VersionPointer:
+    """Read ``active`` as a pointer, or refuse fail-closed with a catalogued error.
+
+    Anything unreadable lands here — malformed JSON, a schema violation, a path that is a
+    directory rather than a file. All of it becomes :class:`IntegrityError`, so a consumer's
+    existing ``except IntegrityError`` handler catches it instead of a raw pydantic error
+    escaping the trust boundary.
+    """
+    try:
+        return VersionPointer.model_validate_json(active.read_bytes())
+    except (OSError, ValidationError) as exc:
+        raise IntegrityError("active pointer exists but could not be read") from exc
+
+
 class _Freshness(Enum):
     """What ONE comparison proved: fresh enough, provably stale, or nothing at all."""
 
@@ -315,7 +338,8 @@ class _Freshness(Enum):
 _STALE_SEQUENCE: Final = "refusing rollback: sequence is not fresher than the active pointer's"
 _STALE_VERSION: Final = "refusing rollback: version is older (PEP 440) than the active pointer's"
 _UNPROVABLE: Final = (
-    "refusing rollback: version is not PEP 440 and no monotonic sequence proves freshness"
+    "refusing rollback: version is not strictly greater (equal, or not PEP 440) "
+    "and no monotonic sequence proves freshness"
 )
 
 
@@ -336,9 +360,9 @@ def _downgrade_reason(incoming: VersionPointer, active: VersionPointer) -> str |
 def _freshness_refusal(sequence: _Freshness, version: _Freshness) -> str | None:
     """Combine the two verdicts FAIL-CLOSED: either one stale refuses, and so does no proof.
 
-    The rule the whole guard reduces to: a promote must be PROVED at least as fresh as the
-    active pointer. Two comparisons can supply that proof — a strictly-greater monotonic
-    counter, or a comparable PEP 440 version. Neither speaking is a refusal, not a pass.
+    The rule the whole guard reduces to: a promote must be PROVED fresher than the active
+    pointer. Two comparisons can supply that proof — a strictly-greater monotonic counter,
+    or a strictly-greater PEP 440 version. Neither speaking is a refusal, not a pass.
     """
     if sequence is _Freshness.STALE:
         return _STALE_SEQUENCE
@@ -362,16 +386,28 @@ def _sequence_verdict(incoming: VersionPointer, active: VersionPointer) -> _Fres
 
 
 def _version_verdict(incoming: str, active: str) -> _Freshness:
-    """PEP 440 verdict; a version either side cannot parse proves nothing (fail-closed).
+    """PEP 440 verdict; only a STRICTLY GREATER version proves freshness (fail-closed).
 
-    ``InvalidVersion`` used to be swallowed into "not a downgrade", which handed every
-    date-versioned publisher a rollback bypass. It is now an absence of proof, and an
-    absence of proof on BOTH comparisons refuses the promote.
+    Two absences of proof are folded in here, both of which used to read as ``FRESH``:
+
+    - ``InvalidVersion`` — a version either side cannot parse. Swallowing it into "not a
+      downgrade" handed every date-versioned publisher a rollback bypass.
+    - An EQUAL version — ``Version(a) < Version(b)`` is ``False`` for equal versions, and
+      that single ``False`` was taken as affirmative proof. Two different bundles can wear
+      one label, so an equal version says nothing about which is newer: it is a replay
+      window, not a pass. An equal-version re-publish proves itself with ``sequence``.
+
+    An absence of proof on BOTH comparisons refuses the promote.
     """
     try:
-        return _Freshness.STALE if Version(incoming) < Version(active) else _Freshness.FRESH
+        incoming_version, active_version = Version(incoming), Version(active)
     except InvalidVersion:
         return _Freshness.UNDECIDABLE
+    if incoming_version < active_version:
+        return _Freshness.STALE
+    if incoming_version == active_version:
+        return _Freshness.UNDECIDABLE
+    return _Freshness.FRESH
 
 
 def _decompress(stored: bytes, max_output_size: int) -> bytes:

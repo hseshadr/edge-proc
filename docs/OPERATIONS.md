@@ -21,12 +21,20 @@ consumer should publish with `bundle_id`, `channel`, and `sequence`, then sync w
 do not provide cross-bundle identity protection.
 
 Promotion is fail-closed on freshness, not merely on the absence of disproof. Replacing the
-active pointer requires PROOF that the incoming one is at least as fresh: a strictly-greater
-monotonic `sequence`, or a `version` PEP 440 can compare. Either comparison proving staleness
-refuses the promote, and so does neither comparison being able to speak — a version PEP 440
-cannot parse with no `sequence` to fall back on is refused, because a signature proves who
-published a pointer and never how recent it is. Publishers whose version scheme PEP 440
-cannot parse (date strings, build labels) must bind `--sequence` to keep shipping.
+active pointer requires PROOF that the incoming one is fresher: a strictly-greater monotonic
+`sequence`, or a strictly-greater PEP 440 `version`. Either comparison proving staleness
+refuses the promote, and so does neither comparison being able to speak. Two cases where
+nothing can speak: a version PEP 440 cannot parse, and a version EQUAL to the active one —
+two different bundles can wear one label, so an equal version says nothing about which is
+newer. A signature proves who published a pointer and never how recent it is, so a replayed
+pointer is validly signed by construction. Publishers who re-ship under one label, or whose
+version scheme PEP 440 cannot parse (date strings, build labels), must bind `--sequence` to
+keep shipping. Re-promoting the byte-identical active pointer is a no-op and needs no proof.
+
+The guard's own input is held to the same bar. `active` missing entirely means nothing has
+been promoted and the first promote needs no proof; an `active` that exists but cannot be
+read as a pointer is refused as `[bundle.integrity_failed]`, never treated as "nothing is
+active" — that answer would skip the freshness check altogether.
 
 Before promotion, EdgeProc verifies the pointer signature, pinned identity, manifest hash,
 manifest identity, every chunk hash, and complete file reassembly. Paths are contained
