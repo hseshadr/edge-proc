@@ -35,10 +35,15 @@ jobs:
       - name: Run the gate
         run: uv run poe gate
 
-  # Full-history secret scan, via the shared brick in hseshadr/ci — where the
+  # Secret scan, via the shared brick in hseshadr/ci — where the
   # mechanics and their rationale now live. One maintained copy of this control
   # instead of an inlined duplicate that drifts: the brick also sets
   # persist-credentials: false, which this inlined copy was missing.
+  # Scope, stated accurately: on push and pull_request gitleaks-action passes
+  # --log-opts=--no-merges --first-parent <base>^..<head>, so it reads the commits
+  # that push or PR introduces — NOT the whole repository. fetch-depth: 0 only
+  # makes the base commit reachable so that range resolves. A full sweep needs a
+  # schedule or workflow_dispatch event, and this workflow fires on neither.
   gitleaks:
     name: Secret scan
     # The reusable workflow lists a PR's commits over the API, which needs
