@@ -125,6 +125,7 @@ def resolve_model_source(
     local = model_path or settings.model_path
     if local is not None:
         return _verified_local_source(local, settings.model_digest)
+    _refuse_orphan_digest(settings.model_digest)
     reference = model_name or settings.model_name
     if not settings.allow_model_download:
         raise ModelNotLocalError(
@@ -132,6 +133,19 @@ def resolve_model_source(
             f"{reference!r}: fetching it would need the network. {REMEDY}"
         )
     return ModelSource(reference=reference, local_files_only=False)
+
+
+def _refuse_orphan_digest(digest: str | None) -> None:
+    """A pin with nothing to pin is worse than no pin — it reads as protection.
+
+    Without this, setting only the digest was accepted and ignored, so a model fetched
+    from the hub arrived entirely unverified while the operator believed it was checked.
+    """
+    if digest is not None:
+        raise ModelPathInvalidError(
+            "EDGEPROC_MODEL_DIGEST is set but EDGEPROC_MODEL_PATH is not, so the pin "
+            "applies to nothing. Set the path the digest is meant to verify."
+        )
 
 
 def _verified_local_source(path: Path, expected_digest: str | None) -> ModelSource:

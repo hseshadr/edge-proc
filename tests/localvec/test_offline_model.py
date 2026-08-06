@@ -260,17 +260,28 @@ def test_digest_changes_when_a_single_byte_changes(tmp_path: Path) -> None:
     assert digest_model_dir(model_dir) != before
 
 
-def test_digest_changes_when_content_moves_between_files(tmp_path: Path) -> None:
-    """Hashing bytes alone would collide here; the relative path is hashed too."""
-    model_dir = _write_model_dir(tmp_path / "model")
-    (model_dir / "a.txt").write_text("alpha")
-    (model_dir / "b.txt").write_text("beta")
-    before = digest_model_dir(model_dir)
+def test_digest_changes_when_a_byte_boundary_moves_between_files(tmp_path: Path) -> None:
+    """A real concatenation collision: both layouts stream the identical bytes ``123``.
 
-    (model_dir / "a.txt").write_text("beta")
-    (model_dir / "b.txt").write_text("alpha")
+    The first version of this test swapped ``"alpha"``/``"beta"`` between two files and
+    asserted the digest changed. It passed with the path-hashing line deleted, because
+    swapping equal-length contents changes the byte stream anyway — it was asserting the
+    property's shape, not the property. edge-proc's own mutation harness caught it
+    (``MS-DIGEST-PATH-BINDING`` survived), which is the finding that produced this test.
 
-    assert digest_model_dir(model_dir) != before
+    Unequal splits are what actually exercise the guard: ``a="1", b="23"`` and
+    ``a="12", b="3"`` concatenate to the same bytes, so only hashing each file's relative
+    path alongside its content can tell them apart.
+    """
+    left = _write_model_dir(tmp_path / "left")
+    (left / "a.txt").write_text("1")
+    (left / "b.txt").write_text("23")
+
+    right = _write_model_dir(tmp_path / "right")
+    (right / "a.txt").write_text("12")
+    (right / "b.txt").write_text("3")
+
+    assert digest_model_dir(left) != digest_model_dir(right)
 
 
 def test_pinned_digest_admits_the_matching_model(
@@ -281,6 +292,26 @@ def test_pinned_digest_admits_the_matching_model(
     monkeypatch.setenv("EDGEPROC_MODEL_DIGEST", digest_model_dir(model_dir))
 
     assert resolve_model_source(EdgeProcSettings()).reference == str(model_dir)
+
+
+@pytest.mark.usefixtures("cold_hf_cache")
+def test_digest_without_a_path_is_refused_rather_than_silently_ignored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pin that applies to nothing is worse than no pin — it reads as protection.
+
+    Setting only the digest used to be accepted and ignored. With a download permitted the
+    model would then arrive from the hub completely unverified while the operator believed
+    a digest was being enforced.
+    """
+    monkeypatch.setenv("EDGEPROC_MODEL_DIGEST", "0" * 64)
+    monkeypatch.setenv("EDGEPROC_ALLOW_MODEL_DOWNLOAD", "1")
+
+    with pytest.raises(ModelPathInvalidError) as caught:
+        resolve_model_source(EdgeProcSettings())
+
+    assert code_of(caught.value) == CONFIG_INVALID
+    assert "EDGEPROC_MODEL_PATH" in str(caught.value)
 
 
 def test_pinned_digest_refuses_a_tampered_model(
