@@ -151,6 +151,11 @@ every consumer, and the budgets above — not these figures — are what the gat
 ## Release evidence
 
 A release is eligible only when `uv run poe gate`, `sh examples/run_loop.sh`,
-`uv run python benchmarks/benchmark.py`, full-history secret scanning, dependency audit,
+`uv run python benchmarks/benchmark.py`, the secret scan, dependency audit,
 and CI all pass on the exact commit. Record the immutable commit/tag and benchmark JSON;
 do not infer production truth from a different local tree.
+
+The secret scan is the shared `hseshadr/ci` brick, called from `ci.yml`. It scans the
+commit range of each push or PR, not the whole repository — see the "no key material in
+the tree" invariant in `CLAUDE.md`. To sweep the entire history before a release, run
+`gitleaks detect` locally against a full clone.
