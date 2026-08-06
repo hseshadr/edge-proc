@@ -54,7 +54,7 @@ runtime/telemetry sink, and availability of a consumer-selected CDN or model reg
 | `Task.payload` and query text | Selected in-process runtime | `LocalVecRuntime` accepts only `local_only` and sends no query request | Host process; consumer owns deletion |
 | `ResultEnvelope` | Default `NullSink` | No telemetry egress by default; a custom sink is consumer code and may egress | Consumer-defined |
 | Signed bundle bytes | Consumer-selected filesystem or HTTP origin | `GET /latest`, `/manifest/<hash>`, and `/chunk/<hash>`; the origin sees ordinary HTTP metadata, never task payloads | Local CAS until consumer deletion/GC |
-| Embedding model | Local cache/model path | `TextEncoder` may download the configured SentenceTransformer model and may use `HF_TOKEN`; pre-provision or point at a local model for zero-egress startup | Hugging Face cache, controlled by consumer |
+| Embedding model | Local directory named by `EDGEPROC_MODEL_PATH` — normally what `sync --materialize-to` wrote | No egress by default. With no local model configured `TextEncoder` refuses (`config.missing`) before any loader is built; it does not fall back to a download. A fetch happens only when `EDGEPROC_ALLOW_MODEL_DOWNLOAD` is set — a build-machine setting — and `HF_TOKEN` is used only on that path. `EDGEPROC_MODEL_DIGEST` pins a model that did not arrive in the signed bundle; a mismatch is refused as `bundle.integrity_failed` | Consumer-owned model directory; a Hugging Face cache exists only if a download was permitted |
 | Signing key | Publisher filesystem | Never transmitted by EdgeProc | Publisher deletes/rotates it |
 
 The library has no account database, analytics endpoint, or hidden telemetry. Deleting a
