@@ -35,15 +35,21 @@ jobs:
       - name: Run the gate
         run: uv run poe gate
 
-  # Full-history secret scan (house standard §4). GITLEAKS_LICENSE is not
-  # needed: this is a personal account, not an organization.
+  # Secret scan, via the shared brick in hseshadr/ci — where the
+  # mechanics and their rationale now live. One maintained copy of this control
+  # instead of an inlined duplicate that drifts: the brick also sets
+  # persist-credentials: false, which this inlined copy was missing.
+  # Scope, stated accurately: on push and pull_request gitleaks-action passes
+  # --log-opts=--no-merges --first-parent <base>^..<head>, so it reads the commits
+  # that push or PR introduces — NOT the whole repository. fetch-depth: 0 only
+  # makes the base commit reachable so that range resolves. A full sweep needs a
+  # schedule or workflow_dispatch event, and this workflow fires on neither.
   gitleaks:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          fetch-depth: 0 # full history — gitleaks scans every commit
-
-      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    name: Secret scan
+    # The reusable workflow lists a PR's commits over the API, which needs
+    # pull-requests: read. The workflow-level `contents: read` does not grant it,
+    # and a caller job may raise a scope the read-only top level withholds.
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: hseshadr/ci/.github/workflows/secret-scan.yml@605e51cbc86f452b56edcf1c9660921da797cbfe # ci-v3.2.1

@@ -103,9 +103,17 @@ Each rule carries the real shipped scar it prevents:
 - **No hardcoded config.** Scar: the default embedding model, top-k, and HTTP
   timeout were once hardcoded (one of them duplicated) across modules — they
   are `EdgeProcSettings` fields now. New tunables go there, never inline.
-- **No key material in the tree.** `*.key` is gitignored, gitleaks scans full
-  history in CI, and the trust-root public key is *pointed at* by config
+- **No key material in the tree.** `*.key` is gitignored, gitleaks scans every
+  incoming commit in CI, and the trust-root public key is *pointed at* by config
   (`EDGEPROC_TRUST_ROOT_PUBKEY_PATH`), never embedded.
+  **"Incoming", not "all" — this line used to overclaim "full history".** On
+  `push` and `pull_request` gitleaks-action passes
+  `--log-opts=--no-merges --first-parent <base>^..<head>`, so it walks that
+  push's or PR's commit range, never the whole repo; `fetch-depth: 0` only makes
+  the base commit present so the range resolves. A real full sweep needs a
+  `workflow_dispatch` or `schedule` event and `ci.yml` fires on neither, so
+  commits predating the job have never been scanned. Evidence: the red run in
+  PR #43 logged `2 commits scanned`.
 
 ## Engineering-standard declaration
 
