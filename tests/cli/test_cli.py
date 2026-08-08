@@ -258,7 +258,7 @@ def _write_task(path: Path, *, kind: str = "search") -> None:
 def test_route_executes_search_over_a_saved_index(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(_cli_app_module, "build_encoder", lambda _model: FakeEncoder())
+    monkeypatch.setattr(_cli_app_module, "build_encoder", lambda _model, _path=None: FakeEncoder())
     index_dir = tmp_path / "idx"
     _save_catalog_index(index_dir)
     task = tmp_path / "task.json"
@@ -274,7 +274,7 @@ def test_route_executes_search_over_a_saved_index(
 def test_route_pretty_summarizes_the_envelope(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(_cli_app_module, "build_encoder", lambda _model: FakeEncoder())
+    monkeypatch.setattr(_cli_app_module, "build_encoder", lambda _model, _path=None: FakeEncoder())
     index_dir = tmp_path / "idx"
     _save_catalog_index(index_dir)
     task = tmp_path / "task.json"
@@ -292,7 +292,7 @@ def test_route_pretty_summarizes_the_envelope(
 def test_route_no_accepting_runtime_exits_nonzero(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(_cli_app_module, "build_encoder", lambda _model: FakeEncoder())
+    monkeypatch.setattr(_cli_app_module, "build_encoder", lambda _model, _path=None: FakeEncoder())
     index_dir = tmp_path / "idx"
     _save_catalog_index(index_dir)
     task = tmp_path / "task.json"
@@ -322,7 +322,7 @@ def test_route_invalid_task_json_fails_closed(tmp_path: Path) -> None:
 def test_route_missing_index_dir_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(_cli_app_module, "build_encoder", lambda _model: FakeEncoder())
+    monkeypatch.setattr(_cli_app_module, "build_encoder", lambda _model, _path=None: FakeEncoder())
     task = tmp_path / "task.json"
     _write_task(task)
 
@@ -332,6 +332,58 @@ def test_route_missing_index_dir_fails_closed(
 
     assert result.exit_code == 1
     assert '"success"' not in result.stdout
+
+
+def test_route_without_a_local_model_refuses_as_coded_config_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``route`` is the on-device verb: no local model must refuse, not silently fetch.
+
+    ``build_encoder`` is deliberately NOT faked here — the real resolution runs, so this
+    covers the CLI's translation of a model refusal into an operator-readable failure
+    rather than a traceback. The env is scrubbed so a developer's own `.env` or warm
+    cache cannot turn the refusal into a download.
+    """
+    for var in ("EDGEPROC_MODEL_PATH", "EDGEPROC_ALLOW_MODEL_DOWNLOAD"):
+        monkeypatch.delenv(var, raising=False)
+    index_dir = tmp_path / "idx"
+    _save_catalog_index(index_dir)
+    task = tmp_path / "task.json"
+    _write_task(task)
+
+    result = runner.invoke(app, ["route", "--index-dir", str(index_dir), "--task", str(task)])
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.stderr
+    assert "[config.missing]" in result.stderr
+    assert "EDGEPROC_MODEL_PATH" in result.stderr
+
+
+def test_route_refuses_a_model_path_that_is_not_a_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("EDGEPROC_MODEL_PATH", raising=False)
+    index_dir = tmp_path / "idx"
+    _save_catalog_index(index_dir)
+    task = tmp_path / "task.json"
+    _write_task(task)
+
+    result = runner.invoke(
+        app,
+        [
+            "route",
+            "--index-dir",
+            str(index_dir),
+            "--task",
+            str(task),
+            "--model-path",
+            str(tmp_path / "no-such-model"),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.stderr
+    assert "[config.invalid]" in result.stderr
 
 
 def test_materialize_refuses_traversal_before_writing(tmp_path: Path) -> None:

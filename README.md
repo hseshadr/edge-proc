@@ -52,7 +52,7 @@ embedding API, no vector database, no ranking server in the request path.
 
 Everything below was run to produce the output shown.
 
-**The real shape, so nothing surprises you:** one 30-line Python script, then five CLI
+**The real shape, so nothing surprises you:** one short Python script, then five CLI
 commands. The script exists because persisting an index is library work — there is no
 `edgeproc build-index` verb, and pretending otherwise would just hide the interesting part.
 
@@ -61,13 +61,15 @@ Measured on a fresh clone into a fresh venv with cold caches (Apple Silicon, fas
 | | measured |
 |---|---|
 | `uv sync --all-extras` | 5.5 s, 75 packages |
-| step 1, first run | 43 s — the one-time `all-MiniLM-L6-v2` download is 87 MB of it |
-| steps 2–6 (`keygen` → `route`) | 7.5 s |
-| **total machine time** | **~1 minute** |
-| **total disk** | **~1.0 GB** — 947 MB venv (torch + FAISS) + 87 MB model |
+| step 1, first run | 45 s — the one-time `all-MiniLM-L6-v2` download is 87 MB of it |
+| steps 2–6 (`keygen` → `route`) | 21 s — publish and sync move that 87 MB model too |
+| **total machine time** | **~70 s** |
+| **total disk** | **~1.4 GB** — 947 MB venv (torch + FAISS) + ~500 MB the walkthrough writes |
 
-The venv, not the model, is what costs you a gigabyte. Budget more wall-clock on a slow link;
-the download is one-time and every later run reuses it.
+The venv is what costs you a gigabyte. The other 500 MB is the 87 MB model as it passes
+through `src/`, `origin/`, `cache/`, and `materialized/` — delete the walkthrough directory
+and it all goes. Budget more wall-clock on a slow link; the download is one-time and every
+later run reuses it.
 
 ```bash
 git clone https://github.com/hseshadr/edge-proc.git
@@ -77,8 +79,9 @@ uv sync --all-extras   # ~950 MB venv; step 1 then downloads an 87 MB embedding 
 
 ### 1. Make something worth shipping
 
-A small product catalog, turned into a searchable index on disk. This is the one script in the
-walkthrough — everything after it is a CLI command.
+A small product catalog, turned into a searchable index on disk — plus a copy of the embedding
+model that built it, because the device will need that too. This is the one script in the
+walkthrough; everything after it is a CLI command.
 
 ```bash
 cat > save_index.py <<'PY'
@@ -109,19 +112,27 @@ async def main() -> None:
         ]
     )
     index.save(Path("catalog_idx"))
+    encoder.save(Path("model"))
 
 
 asyncio.run(main())
 PY
 
-uv run python save_index.py
+EDGEPROC_ALLOW_MODEL_DOWNLOAD=1 uv run python save_index.py
 ls catalog_idx
+du -sh model
 ```
 
 ```text
 index.faiss
 state.json
+ 87M	model
 ```
+
+`EDGEPROC_ALLOW_MODEL_DOWNLOAD=1` is the only line in this walkthrough that touches the
+network. You are on a build machine, so fetching the model here is fine — and the whole point
+of saving it into `model/` is that the device never has to. EdgeProc will not make that fetch
+without the opt-in: leave the variable off and step 1 refuses instead of quietly downloading.
 
 ### 2. Mint a signing key
 
@@ -138,8 +149,11 @@ wrote keys/private.key and keys/public.key
 
 ### 3. Publish a signed release
 
+Both the index and the model go into `--src`, so both get chunked and signed under the same
+key. Shipping the model is what makes step 5 work with the network unplugged.
+
 ```bash
-mkdir -p src && cp -r catalog_idx src/
+mkdir -p src && cp -r catalog_idx model src/
 
 uv run edgeproc publish \
     --src src --origin-dir origin \
@@ -148,7 +162,7 @@ uv run edgeproc publish \
 ```
 
 ```text
-published v1.0.0 manifest=c4c28ab05da5
+published v1.0.0 manifest=4587411eea91
 ```
 
 `origin/` is now a plain directory of hash-named files. Put it behind any static web server or
@@ -164,21 +178,30 @@ uv run edgeproc sync \
 ```
 
 ```text
-synced v1.0.0 manifest=c4c28ab05da5 chunks_fetched=2 chunks_reused=0 bytes_fetched=5903
+synced v1.0.0 manifest=4587411eea91 chunks_fetched=2151 chunks_reused=0 bytes_fetched=83388300
 ```
 
+83 MB, because this is the first sync and the model is most of it. Later syncs move kilobytes —
+step 6 shows that.
+
 ### 5. Search the file that just arrived
+
+`materialized/` now holds the index *and* the model, both verified against the pinned key.
+`--model-path` points at the model that just arrived, which is why this step needs no network.
 
 ```bash
 cat > task.json <<'JSON'
 {"kind": "search", "payload": {"query": "shoes for running", "k": 3}, "privacy_mode": "local_only"}
 JSON
 
-uv run edgeproc route --index-dir materialized/catalog_idx --task task.json --pretty
+uv run edgeproc route \
+    --index-dir materialized/catalog_idx \
+    --model-path materialized/model \
+    --task task.json --pretty
 ```
 
 ```text
-success=True runtime=localvec latency=112.7ms
+success=True runtime=localvec latency=109.6ms
   p1  0.219
   p4  0.246
   p2  0.556
@@ -199,7 +222,7 @@ uv run edgeproc sync --base-url origin --cache-dir cache --key keys/public.key -
 ```
 
 ```text
-synced v1.0.0 manifest=c4c28ab05da5 chunks_fetched=0 chunks_reused=2 bytes_fetched=0
+synced v1.0.0 manifest=4587411eea91 chunks_fetched=0 chunks_reused=2151 bytes_fetched=0
 ```
 
 **A small edit ships as a small delta.** Publish `1.0.1` with one line appended, then re-sync:
@@ -214,11 +237,25 @@ uv run edgeproc sync --base-url origin --cache-dir cache --key keys/public.key \
 ```
 
 ```text
-published v1.0.1 manifest=312b66ae9d63
-synced v1.0.1 manifest=312b66ae9d63 chunks_fetched=1 chunks_reused=1 bytes_fetched=157
+published v1.0.1 manifest=3f0941c9725a
+synced v1.0.1 manifest=3f0941c9725a chunks_fetched=1 chunks_reused=2150 bytes_fetched=157
 ```
 
-157 bytes instead of 5,903 — it re-fetched the one chunk that changed and reused the rest.
+157 bytes instead of 83 MB — it re-fetched the one chunk that changed and reused the other
+2,150, model included.
+
+**No model, no answers.** Drop `--model-path` and `route` refuses. It does not fall back to
+downloading one, which is the whole reason step 5 can run on an unplugged machine:
+
+```bash
+uv run edgeproc route --index-dir materialized/catalog_idx --task task.json --pretty
+echo "exit=$?"
+```
+
+```text
+[config.missing] no local embedding model is configured, so EdgeProc will not load 'sentence-transformers/all-MiniLM-L6-v2': fetching it would need the network. Set EDGEPROC_MODEL_PATH to a local model directory (ship the model in the signed bundle and point at what `edgeproc sync --materialize-to` wrote), or set EDGEPROC_ALLOW_MODEL_DOWNLOAD=1 to permit a one-time fetch on a build machine.
+exit=1
+```
 
 **No key means no sync.** There is no "just this once" mode:
 
@@ -258,10 +295,12 @@ version instead of silently serving corrupted data.
 
 ### Prefer to stay in Python?
 
-The same search, in-process, without the CLI:
+The same search, in-process, without the CLI. `model_path` is the library-level equivalent of
+`--model-path`; without it `TextEncoder()` raises rather than reaching for the hub.
 
 ```python
 import asyncio
+from pathlib import Path
 
 from edgeproc import EdgeProc, PrivacyMode, RuntimeRegistry, Task, TaskKind
 from edgeproc.localvec.encoder import TextEncoder
@@ -271,7 +310,8 @@ CATALOG = {"p1": "red running shoes", "p2": "waterproof hiking boots", "p3": "tr
 
 
 async def main() -> None:
-    runtime = await LocalVecRuntime.from_texts(CATALOG, encoder=TextEncoder())
+    encoder = TextEncoder(model_path=Path("materialized/model"))
+    runtime = await LocalVecRuntime.from_texts(CATALOG, encoder=encoder)
     registry = RuntimeRegistry(); registry.register(runtime)
     result = await EdgeProc(registry=registry).run(
         Task(kind=TaskKind.SEARCH, payload={"query": "shoes for running"}, privacy_mode=PrivacyMode.LOCAL_ONLY)
@@ -300,8 +340,9 @@ Moving both the data and the compute to the device buys four things at once:
   reranking collapse into a one-time bundle build.
 - **Traffic spikes land on clients, not your servers.** A launch or a front-page link is
   absorbed by users' own devices. Nothing to autoscale, nothing to fall over.
-- **It survives weak or absent connectivity.** After one sync the device needs no network at
-  all to keep answering queries.
+- **It survives weak or absent connectivity.** Ship the embedding model in the bundle next to
+  the index, and after one sync the device needs no network at all to keep answering queries.
+  If the model isn't there, EdgeProc refuses the query instead of quietly going to fetch one.
 - **Tampering is caught, not tolerated.** Verification is fail-closed, and because the data is
   searched locally, it never leaves the device to begin with.
 
@@ -392,7 +433,10 @@ ecosystem-standard `HF_TOKEN`):
 
 | Setting | Env var | Default | Purpose |
 | --- | --- | --- | --- |
-| `model_name` | `EDGEPROC_MODEL_NAME` | `sentence-transformers/all-MiniLM-L6-v2` | Embedding model. |
+| `model_name` | `EDGEPROC_MODEL_NAME` | `sentence-transformers/all-MiniLM-L6-v2` | Embedding model, as a hub reference. Only used when a download is permitted. |
+| `model_path` | `EDGEPROC_MODEL_PATH` | `None` | Local model directory — the offline path. Point it at what `sync --materialize-to` wrote. |
+| `model_digest` | `EDGEPROC_MODEL_DIGEST` | `None` | sha256 pin for `model_path`; a mismatch is refused. Unset ⇒ no check. |
+| `allow_model_download` | `EDGEPROC_ALLOW_MODEL_DOWNLOAD` | `False` | Permit fetching the model from the hub. Off by default: no local model ⇒ refused, never fetched. |
 | `hf_token` | `HF_TOKEN` | `None` | Hugging Face auth token. |
 | `default_k` | `EDGEPROC_DEFAULT_K` | `10` | Default top-k results. |
 | `http_timeout` | `EDGEPROC_HTTP_TIMEOUT` | `30.0` | Bundle HTTP fetch timeout (s). |
@@ -408,7 +452,7 @@ ecosystem-standard `HF_TOKEN`):
 | `rrf_k_window` | `EDGEPROC_RRF_K_WINDOW` | `60` | RRF rank-window constant for hybrid fusion. |
 | `trust_root_pubkey_path` | `EDGEPROC_TRUST_ROOT_PUBKEY_PATH` | `None` | Pinned sync trust-root pubkey (no key ⇒ `sync` refused). |
 
-That is the complete set — all 15 fields of `EdgeProcSettings`. A test asserts this table
+That is the complete set — all 18 fields of `EdgeProcSettings`. A test asserts this table
 matches the settings object field-for-field, so a new setting cannot ship undocumented.
 
 One more environment variable exists that is deliberately **not** an `EdgeProcSettings`

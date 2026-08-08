@@ -2,18 +2,18 @@
 
 Goal: clone the repo, run the gate, then walk a real catalog through the full **keygen → publish → sync → route** loop.
 
-**Shape:** seven steps — one 30-line Python script (step 2) and six CLI commands. The script is
+**Shape:** seven steps — one short Python script (step 2) and six CLI commands. The script is
 there because persisting an index is library work; there is no `edgeproc build-index` verb.
 
 **Cost**, measured on a fresh clone into a fresh venv with cold caches (Apple Silicon, fast
-connection): about **1 minute of machine time** and about **1.0 GB of disk**.
+connection): about **70 seconds of machine time** and about **1.4 GB of disk**.
 
 | | measured |
 |---|---|
 | `uv sync --all-extras` | 5.5 s, 75 packages, 947 MB venv (torch + FAISS dominate) |
 | `uv run poe gate` | 37 s, 309 tests |
-| step 2, first run | 43 s — the one-time `all-MiniLM-L6-v2` download is 87 MB of it |
-| steps 3–7 | 7.5 s |
+| step 2, first run | 45 s — the one-time `all-MiniLM-L6-v2` download is 87 MB of it |
+| steps 3–7 | 21 s — publish and sync move that 87 MB model too |
 
 Budget more wall-clock on a slow link. The model download happens once; later runs reuse it.
 
@@ -21,7 +21,8 @@ Budget more wall-clock on a slow link. The model download happens once; later ru
 
 - Python 3.13+
 - [`uv`](https://docs.astral.sh/uv/) (`brew install uv` or `curl -LsSf https://astral.sh/uv/install.sh | sh`)
-- About 1.0 GB free: a ~950 MB venv plus an 87 MB `all-MiniLM-L6-v2` download on first run
+- About 1.4 GB free: a ~950 MB venv, plus ~500 MB the walkthrough writes — the 87 MB
+  `all-MiniLM-L6-v2` model and its copies through `src/`, `origin/`, `cache/`, `materialized/`
 
 ## 1. Clone and gate
 
@@ -35,9 +36,10 @@ uv run poe gate         # lint + format-check + mypy strict + Radon Grade A + py
 
 `poe gate` is the same set of checks CI runs. If it passes locally, CI passes.
 
-## 2. Persist a catalog index
+## 2. Persist a catalog index and the model that built it
 
-A `route` call needs an on-disk index. Save one (the FAISS file + a small `state.json` sidecar):
+A `route` call needs two things on disk: an index (the FAISS file + a small `state.json`
+sidecar) and the embedding model, so the device can encode a query without calling anyone.
 
 ```bash
 cat > save_index.py <<'PY'
@@ -68,13 +70,20 @@ async def main() -> None:
         ]
     )
     index.save(Path("catalog_idx"))
+    encoder.save(Path("model"))
 
 
 asyncio.run(main())
 PY
 
-uv run python save_index.py
+EDGEPROC_ALLOW_MODEL_DOWNLOAD=1 uv run python save_index.py
+#   catalog_idx/{index.faiss,state.json} and an 87 MB model/
 ```
+
+`EDGEPROC_ALLOW_MODEL_DOWNLOAD=1` is the only network access in this walkthrough. You are on a
+build machine, so fetching the model here is fine; the device is never allowed to, which is
+what makes step 5 genuinely offline. Without the opt-in this step refuses rather than
+downloading — a fetch is something you ask for, never a fallback.
 
 ## 3. Sign a release on the publisher
 
@@ -84,7 +93,7 @@ uv run python save_index.py
 uv run edgeproc keygen --out keys
 #   wrote keys/private.key and keys/public.key
 
-mkdir -p src && cp -r catalog_idx src/
+mkdir -p src && cp -r catalog_idx model src/
 
 uv run edgeproc publish \
     --src src \
@@ -93,8 +102,10 @@ uv run edgeproc publish \
     --bundle-id catalog \
     --version 1.0.0 \
     --pretty
-#   published v1.0.0 manifest=c4c28ab05da5
+#   published v1.0.0 manifest=4587411eea91
 ```
+
+`--src` holds the index **and** the model, so both are chunked and signed under the same key. The model is payload, not something the device fetches separately from a model registry.
 
 `origin/` now holds the full CDN contract: `latest` (the signed pointer), `manifest/<hash>`, and `chunk/<hash>` (one zstd blob per unique chunk). Point a static server or CDN at it as-is.
 
@@ -109,12 +120,16 @@ uv run edgeproc sync \
     --key keys/public.key \
     --materialize-to materialized \
     --pretty
-#   synced v1.0.0 manifest=c4c28ab05da5 chunks_fetched=2 chunks_reused=0 bytes_fetched=5903
+#   synced v1.0.0 manifest=4587411eea91 chunks_fetched=2151 chunks_reused=0 bytes_fetched=83388300
 ```
+
+83 MB because this is the first sync and the model is nearly all of it; step 6 shows what a later one costs. `materialized/` now holds `catalog_idx/` and `model/`, both verified against the pinned key.
 
 Without `--key` (and without `EDGEPROC_TRUST_ROOT_PUBKEY_PATH` set) `sync` refuses to run — an unverifiable pull is rejected fail-closed.
 
 ## 5. Route a task against the delivered index
+
+`--model-path` points at the model that just arrived in the bundle. This step needs no network, and if you leave the flag off it refuses rather than fetching one.
 
 ```bash
 cat > task.json <<'JSON'
@@ -123,15 +138,24 @@ JSON
 
 uv run edgeproc route \
     --index-dir materialized/catalog_idx \
+    --model-path materialized/model \
     --task task.json \
     --pretty
-#   success=True runtime=localvec latency=112.7ms
+#   success=True runtime=localvec latency=109.6ms
 #     p1  0.219
 #     p4  0.246
 #     p2  0.556
 ```
 
 Distances are deterministic for the same model and catalog; `latency` varies by machine.
+
+Drop `--model-path` (with no `EDGEPROC_MODEL_PATH` set) and you get the refusal instead:
+
+```bash
+uv run edgeproc route --index-dir materialized/catalog_idx --task task.json --pretty
+#   [config.missing] no local embedding model is configured, so EdgeProc will not load
+#   'sentence-transformers/all-MiniLM-L6-v2': fetching it would need the network. ...
+```
 
 The exit code mirrors `success` (`0` ok, `1` for `no_runtime_accepted` or any verification failure), so scripts can branch on it without parsing JSON.
 
@@ -145,15 +169,15 @@ echo "tiny edit" >> src/catalog_idx/state.json
 uv run edgeproc publish \
     --src src --origin-dir origin --key keys/private.key \
     --bundle-id catalog --version 1.0.1 --pretty
-#   published v1.0.1 manifest=312b66ae9d63
+#   published v1.0.1 manifest=3f0941c9725a
 
 uv run edgeproc sync \
     --base-url origin --cache-dir cache --key keys/public.key \
     --materialize-to materialized --pretty
-#   synced v1.0.1 manifest=312b66ae9d63 chunks_fetched=1 chunks_reused=1 bytes_fetched=157
+#   synced v1.0.1 manifest=3f0941c9725a chunks_fetched=1 chunks_reused=2150 bytes_fetched=157
 ```
 
-157 bytes instead of the original 5,903 — one changed chunk re-fetched, the rest reused.
+157 bytes instead of the original 83 MB — one changed chunk re-fetched, the other 2,150 reused, the whole model among them.
 
 ## 7. Try a tampered origin
 

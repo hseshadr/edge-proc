@@ -4,6 +4,54 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
 
 ## [Unreleased]
 
+### Fixed
+- **"Works offline" was false on a cold device, and is now true.** The README promised that
+  "after one sync the device needs no network at all to keep answering queries". `sync`
+  shipped the FAISS index but not the *embedding model*, so `TextEncoder` resolved
+  `sentence-transformers/all-MiniLM-L6-v2` by calling huggingface.co when it was
+  constructed. On any machine with a warm Hugging Face cache that fetch is invisible, every
+  test passed, and the claim read as true. Reproduced on a genuinely cold cache: the
+  encoder issued `HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/
+  resolve/main/./modules.json` and the query could not be answered.
+
+  `docs/OPERATIONS.md` was the only file that stated this correctly. `README.md` and
+  `docs/ARCHITECTURE.md` contradicted it, including ARCHITECTURE's claim that the pinned
+  public key "is the only thing the consumer has to obtain out-of-band" — the model was a
+  second out-of-band artifact, and unlike the key it was neither pinned nor verified.
+
+### Added
+- **Fail-closed model resolution** (`edgeproc.localvec.model_source`). Egress is now opt-in
+  rather than a fallback. With no local model configured, `TextEncoder()` raises
+  `ModelNotLocalError` (canonical code `config.missing`) **before any loader is
+  constructed** — it does not fetch. The ordering is the guard: `huggingface_hub`
+  downloads through `hf_xet`, a Rust extension that never enters Python's `socket` module,
+  so a socket-level block cannot observe it. Refusing before the call is the only check
+  that cannot be bypassed from underneath.
+- `EDGEPROC_MODEL_PATH` — a local model directory, the supported offline path. Ship the
+  model under `publish --src` and point this at what `sync --materialize-to` wrote, and the
+  weights travel under the same pinned key as the data.
+- `EDGEPROC_MODEL_DIGEST` — optional sha256 pin over that directory for a model that did
+  *not* arrive through `sync`. A mismatch is refused (`bundle.integrity_failed`), not warned.
+- `EDGEPROC_ALLOW_MODEL_DOWNLOAD` (default `false`) — permits a one-time fetch. Intended
+  for a build machine; a device never sets it.
+- `TextEncoder.save(path)` — writes the loaded model so `publish` can chunk and sign it.
+  This is the provisioning half that makes the fail-closed default workable.
+- `edgeproc route --model-path`. A model refusal now renders as a coded CLI failure
+  (`[config.missing] ...`) instead of a traceback.
+
+### Changed
+- **BREAKING for anyone relying on the implicit download.** `TextEncoder()` previously
+  fetched the model on demand; it now refuses unless `EDGEPROC_MODEL_PATH` is set or
+  `EDGEPROC_ALLOW_MODEL_DOWNLOAD=1`. The refusal names both remedies verbatim, so the
+  migration is one environment variable. This is the same fail-closed posture `sync`
+  already takes when no trust root is pinned.
+- `examples/run_loop.sh` now demonstrates the invariant rather than merely surviving it.
+  Step 2 is labelled the build machine and is the only step permitted to fetch; step 5
+  routes with **every Hugging Face cache variable redirected at an empty directory**, so a
+  passing search proves the weights came out of the verified bundle and not from the
+  developer's cache; step 6 drops `--model-path` and asserts the refusal, so the guard is
+  watched failing on every run.
+
 ## [0.3.1] — 2026-08-03
 
 A dependency-metadata release, and it only matters once published. The floor

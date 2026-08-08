@@ -164,6 +164,10 @@ complexity = "xenon --max-absolute A --max-modules A --max-average A edgeproc/"
 test = "pytest"
 # `gate` mirrors CI exactly (lint + format-check + typecheck + complexity + test).
 gate = ["lint", "fmt-check", "typecheck", "complexity", "test"]
+# Breaks one real guard at a time and checks the suite goes red. Deliberately NOT in
+# `gate`: it re-runs the suite once per mutation (minutes, not seconds), so it stays an
+# opt-in measurement rather than a per-commit tax.
+mutants = "python scripts/mutation_harness.py"
 
 # edgeproc-core now installs from a git source (or a plain path override) into
 # site-packages, so it's on the normal import path and mypy resolves it directly —

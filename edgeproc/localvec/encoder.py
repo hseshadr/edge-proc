@@ -7,6 +7,7 @@ products, body + headings for documents, etc.) is the consumer's job —
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Protocol, cast, runtime_checkable
 
 import numpy as np
@@ -14,6 +15,7 @@ from numpy.typing import NDArray
 from sentence_transformers import SentenceTransformer
 
 from edgeproc.core.settings import EdgeProcSettings
+from edgeproc.localvec.model_source import resolve_model_source
 
 
 @runtime_checkable
@@ -53,12 +55,26 @@ class _HasEmbeddingDimension(Protocol):
 
 
 class TextEncoder:
-    """sentence-transformers encoder producing normalized float32 vectors."""
+    """sentence-transformers encoder producing normalized float32 vectors.
 
-    def __init__(self, model_name: str | None = None, token: str | None = None) -> None:
+    Fail-closed about the network: construction resolves the model through
+    :func:`~edgeproc.localvec.model_source.resolve_model_source`, which refuses before
+    any loader exists unless a local ``model_path`` is configured or a deploy has
+    explicitly permitted a download. See that module for why the refusal must come first.
+    """
+
+    def __init__(
+        self,
+        model_name: str | None = None,
+        token: str | None = None,
+        model_path: Path | None = None,
+    ) -> None:
         settings = EdgeProcSettings()
+        source = resolve_model_source(settings, model_name, model_path)
         self._model = SentenceTransformer(
-            model_name or settings.model_name, token=token or settings.hf_token
+            source.reference,
+            token=token or settings.hf_token,
+            local_files_only=source.local_files_only,
         )
 
     @property
@@ -80,3 +96,13 @@ class TextEncoder:
     def encode_query(self, query: str) -> NDArray[np.float32]:
         embeddings = self._model.encode([query], convert_to_numpy=True, normalize_embeddings=True)
         return cast(NDArray[np.float32], embeddings[0].astype(np.float32))
+
+    def save(self, path: Path) -> None:
+        """Write the loaded model to ``path`` so it can ship inside a signed bundle.
+
+        This is the provisioning half of the offline story, and the reason a fail-closed
+        default is workable: fetch once on a build machine, save the weights beside the
+        index, publish both, and the device is handed a model it never has to go get.
+        Point ``EDGEPROC_MODEL_PATH`` at what ``sync --materialize-to`` wrote.
+        """
+        self._model.save(str(path))

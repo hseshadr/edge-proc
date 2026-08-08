@@ -5,9 +5,17 @@ weights from the Hub, which a unit test must never do. ``_FakeModel`` records th
 ``model_name`` positional and ``token`` kwarg it was constructed with so tests can
 assert how ``TextEncoder`` resolves config, and offers ``get_embedding_dimension``
 + ``encode`` so the normalization tests keep exercising the real ``TextEncoder`` code.
+
+Because the fake stands in for the download, **nothing in this file can observe whether
+EdgeProc would have used the network** — that blind spot is why a false "works offline"
+claim shipped green. The network property is tested in ``test_offline_model.py`` against
+a cold cache; these tests own encoder *behavior* and grant download permission explicitly
+so they exercise the hub-reference path rather than the fail-closed refusal.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -25,10 +33,15 @@ class _FakeModel:
 
     last_model_name: str | None = None
     last_token: str | None = None
+    last_local_files_only: bool | None = None
+    last_saved_to: str | None = None
 
-    def __init__(self, model_name: str, token: str | None = None) -> None:
+    def __init__(
+        self, model_name: str, token: str | None = None, local_files_only: bool = False
+    ) -> None:
         type(self).last_model_name = model_name
         type(self).last_token = token
+        type(self).last_local_files_only = local_files_only
 
     def get_embedding_dimension(self) -> int:
         return _DIM
@@ -39,12 +52,21 @@ class _FakeModel:
         rows = np.ones((len(texts), _DIM), dtype=np.float32)
         return rows / np.linalg.norm(rows, axis=1, keepdims=True)
 
+    def save(self, path: str) -> None:
+        type(self).last_saved_to = path
+
 
 @pytest.fixture(autouse=True)
 def _fake_sentence_transformer(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("edgeproc.localvec.encoder.SentenceTransformer", _FakeModel)
+    # These tests exercise the hub-reference path, so they must opt in to it: without
+    # permission TextEncoder now refuses before the fake is ever reached. Clearing
+    # EDGEPROC_MODEL_PATH keeps a developer's own .env from redirecting them.
+    monkeypatch.setenv("EDGEPROC_ALLOW_MODEL_DOWNLOAD", "1")
+    monkeypatch.delenv("EDGEPROC_MODEL_PATH", raising=False)
     _FakeModel.last_model_name = None
     _FakeModel.last_token = None
+    _FakeModel.last_local_files_only = None
 
 
 def test_fake_encoder_satisfies_the_protocol() -> None:
@@ -86,10 +108,25 @@ def test_explicit_args_override_settings(monkeypatch: pytest.MonkeyPatch) -> Non
     assert _FakeModel.last_token == "explicit_token"  # noqa: S105 - test token, not a secret
 
 
+def test_save_writes_the_model_where_a_bundle_can_pick_it_up(tmp_path: Path) -> None:
+    """Provisioning: without this the fail-closed default would have no supported escape.
+
+    A build machine fetches once and saves the weights beside the index so `publish` can
+    chunk and sign them; the device then loads that directory and never calls the hub.
+    """
+    destination = tmp_path / "model"
+
+    TextEncoder().save(destination)
+
+    assert _FakeModel.last_saved_to == str(destination)
+
+
 class _FakeModelWithNoDimension:
     """Stand-in for a model that cannot report its own embedding dimension."""
 
-    def __init__(self, model_name: str, token: str | None = None) -> None:
+    def __init__(
+        self, model_name: str, token: str | None = None, local_files_only: bool = False
+    ) -> None:
         pass
 
     def get_embedding_dimension(self) -> int | None:

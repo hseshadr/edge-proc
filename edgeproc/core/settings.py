@@ -42,6 +42,16 @@ class EdgeProcSettings(BaseSettings):
 
     model_name: str = DEFAULT_MODEL
     hf_token: str | None = Field(default=None, validation_alias="HF_TOKEN")
+    # The offline path for the embedding model. `sync` ships the index; without a local
+    # model the encoder would resolve `model_name` by calling the hub, so "needs no
+    # network after one sync" would be false. Point this at what `--materialize-to` wrote.
+    model_path: Path | None = None
+    # Pins a model that did NOT arrive through `sync` (which already verifies its payload
+    # against the trust root). Unset = no check; set = a mismatch is refused, not warned.
+    model_digest: str | None = None
+    # Fail-closed: the encoder never reaches the network unless a deploy explicitly says
+    # it may. Provisioning on a build machine is the legitimate use; a device query is not.
+    allow_model_download: bool = False
     default_k: int = 10
     http_timeout: float = 30.0
     # Fail-closed resource ceilings for the sync substrate (bomb / unbounded-read defense).

@@ -278,25 +278,34 @@ def route(
         str | None,
         typer.Option(help="Encoder model (defaults to EDGEPROC_MODEL_NAME or the built-in)."),
     ] = None,
+    model_path: Annotated[
+        Path | None,
+        typer.Option(help="Local model dir (defaults to EDGEPROC_MODEL_PATH). The offline path."),
+    ] = None,
     pretty: Annotated[bool, typer.Option(help="Print a human summary instead of JSON.")] = False,
 ) -> None:
     """Route a Task (JSON) through a LocalVecRuntime loaded from a saved index dir.
 
     The exit code mirrors the result: 0 when the runtime succeeded, 1 otherwise
     (including ``no_runtime_accepted``), so scripts can branch on it.
+
+    ``route`` is the on-device verb, so it needs no network: pass ``--model-path`` (or set
+    ``EDGEPROC_MODEL_PATH``) pointing at a model that arrived in the signed bundle. Without
+    one it refuses rather than fetching — see ``EDGEPROC_ALLOW_MODEL_DOWNLOAD``.
     """
     task_obj = _load_task(task)
-    runtime = _route_runtime(index_dir, model, index_dir.name)
+    runtime = _route_runtime(index_dir, model, index_dir.name, model_path)
     envelope = _run_task(task_obj, runtime)
     typer.echo(_render(envelope, pretty=pretty))
     raise typer.Exit(code=0 if envelope.success else 1)
 
 
-def build_encoder(model: str | None) -> Encoder:
+def build_encoder(model: str | None, model_path: Path | None = None) -> Encoder:
     """Construct the real text encoder. A seam: tests replace this with a fake."""
     from edgeproc.localvec.encoder import TextEncoder  # noqa: PLC0415  # pragma: no cover
 
-    return TextEncoder(model_name=model)  # pragma: no cover - downloads a model; live demo
+    # pragma: no cover - loads real weights; exercised by examples/run_loop.sh
+    return TextEncoder(model_name=model, model_path=model_path)
 
 
 def _load_task(path: Path) -> Task:
@@ -306,18 +315,35 @@ def _load_task(path: Path) -> Task:
         _fail(f"could not load task from {path}: {exc}", CONFIG_INVALID, field="--task")
 
 
-def _route_runtime(index_dir: Path, model: str | None, index_name: str) -> Runtime:
+def _route_runtime(
+    index_dir: Path, model: str | None, index_name: str, model_path: Path | None = None
+) -> Runtime:
     try:
         # Lazy: route belongs to the optional `[localvec]` extra, not the core deps.
         from edgeproc.localvec.loader import load_local_runtime  # noqa: PLC0415
     except ImportError:  # pragma: no cover - guards a partial install: route is unusable
         # without the [localvec] extra, so we fail closed with an install hint, not a crash.
         _fail("install edge-proc[localvec] to use route")
-    encoder = build_encoder(model)
+    encoder = _build_encoder_or_fail(model, model_path)
     try:
         return load_local_runtime(index_dir, encoder=encoder, index_name=index_name)
     except (FileNotFoundError, ValueError) as exc:
         _fail(f"could not load index from {index_dir}: {exc}")
+
+
+def _build_encoder_or_fail(model: str | None, model_path: Path | None) -> Encoder:
+    """Turn a model refusal into a coded CLI failure instead of a traceback.
+
+    The refusals carry their own canonical codes (``config.missing`` when no local model
+    is configured, ``config.invalid`` for a bad path, ``bundle.integrity_failed`` for a
+    digest mismatch), so ``_fail`` renders each one as itself rather than flattening them.
+    """
+    from edgeproc.localvec.model_source import ModelSourceError  # noqa: PLC0415
+
+    try:
+        return build_encoder(model, model_path)
+    except ModelSourceError as exc:
+        _fail(str(exc), code_of(exc), field="--model-path")
 
 
 def _run_task(task: Task, runtime: Runtime) -> ResultEnvelope:
