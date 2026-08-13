@@ -33,6 +33,7 @@ def test_sdist_contains_every_support_file_needed_by_its_tests(tmp_path: Path) -
         ("CITATION.cff",),
         ("CLAUDE.md",),
         ("ROADMAP.md",),
+        ("SECURITY.md",),
         ("benchmarks", "benchmark.py"),
         ("docs", "ARCHITECTURE.md"),
         ("docs", "OPERATIONS.md"),

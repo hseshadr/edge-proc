@@ -97,6 +97,19 @@ def test_core_dependency_floor_excludes_superseded_releases() -> None:
     assert "`edgeproc-core>=0.4.2`" in _read("README.md")
 
 
+def test_security_policy_supports_only_the_current_release() -> None:
+    policy = _read("SECURITY.md")
+    assert "| 0.4.1   | :white_check_mark: |" in policy
+    assert "| < 0.4.1 | :x:                |" in policy
+    assert "| 0.1.x" not in policy
+
+
+def test_ci_documents_core_as_a_locked_pypi_dependency() -> None:
+    workflow = _read(".github/workflows/ci.yml")
+    assert "edgeproc-core>=0.4.2 resolves from PyPI" in workflow
+    assert "pulled from public GitHub via the git source" not in workflow
+
+
 def test_operations_contract_explains_the_one_commit_snapshot_boundary() -> None:
     operations = _read("docs/OPERATIONS.md")
     assert "generation-addressed" in operations

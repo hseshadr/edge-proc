@@ -80,13 +80,14 @@ packages = ["edgeproc"]
 [tool.hatch.build.targets.sdist]
 # Ship the package plus the complete support surface consumed by the included test suite.
 # A source archive that contains tests but omits their benchmarks, docs, workflow fixtures,
-# mutation harness, or lockfile is not independently testable and must not imply otherwise.
+# policy documents, mutation harness, or lockfile is not independently testable.
 only-include = [
   ".env.example",
   ".github/workflows",
   "CITATION.cff",
   "CLAUDE.md",
   "ROADMAP.md",
+  "SECURITY.md",
   "benchmarks",
   "docs",
   "edgeproc",
