@@ -5,7 +5,7 @@ direction. It's grounded in the [README](README.md) and [CHANGELOG](CHANGELOG.md
 marked *roadmap* are kept as Protocol seams, not yet built. Nothing here is a promise of a
 date.
 
-## Shipped (v0.1.x)
+## Shipped (v0.4.1)
 
 - **Deterministic router** over pluggable runtimes — no LLM in the routing path.
 - **LocalVec runtime** (`[localvec]`): FAISS-backed `EMBED` / `SEARCH` / `RANK` with hybrid
@@ -15,6 +15,8 @@ date.
   and fail-closed verification of every fetch.
 - **CLI** (`edgeproc`): `keygen` → `publish` → `sync` → `route`, all verifying against a
   pinned trust-root pubkey.
+- **PyPI distribution** (`edge-proc`): wheels and source archives published through GitHub
+  OIDC with PEP 740 provenance.
 
 ## Near-term
 
@@ -33,9 +35,7 @@ These are the seams already designed into the architecture, in rough priority or
    sync paths instead of all-or-nothing access. *(Protocol seam exists; not built.)*
 3. **Sigstore keyless bundle signing** — an alternative to pinned ed25519 keys, removing the
    private-key custody burden for publishers. *(Protocol seam exists; not built.)*
-4. **PyPI distribution** — EdgeProc currently installs from source / git; publishing wheels
-   to PyPI (with `edgeproc-core` resolvable) so `pip install edge-proc` Just Works.
-5. **More runtimes behind the same router seam** — the router is runtime-agnostic; growing
+4. **More runtimes behind the same router seam** — the router is runtime-agnostic; growing
    the runtime catalog beyond LocalVec is the natural next step.
 
 ## Out of scope

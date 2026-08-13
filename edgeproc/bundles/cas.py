@@ -114,13 +114,52 @@ def _open_exclusive_temp(path: Path) -> int:
 
 def _atomic_write(target: Path, data: bytes) -> None:
     """Write ``data`` to ``target`` atomically via a fsynced same-dir temp + replace."""
+    _refuse_symlink(target)
     tmp = target.with_name(f"{target.name}.tmp.{os.getpid()}")
     fd = _open_exclusive_temp(tmp)
-    with os.fdopen(fd, "wb") as handle:
-        handle.write(data)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(tmp, target)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, target)
+        _fsync_directory(target.parent)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _fsync_directory(path: Path) -> None:
+    """Persist a rename/unlink in ``path`` instead of only flushing file contents."""
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    fd = os.open(path, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _refuse_symlink(path: Path) -> None:
+    if path.is_symlink():
+        raise IntegrityError(f"refusing symlinked persistence leaf: {path.name}")
+
+
+def _refuse_symlink_components(root: Path, relpath: str) -> None:
+    candidate = root / relpath
+    while candidate != root:
+        _refuse_symlink(candidate)
+        candidate = candidate.parent
+
+
+def _durable_mkdir(path: Path) -> None:
+    """Create every missing component and durably link it from its parent."""
+    missing: list[Path] = []
+    cursor = path
+    while not cursor.exists():
+        missing.append(cursor)
+        cursor = cursor.parent
+    for directory in reversed(missing):
+        directory.mkdir(exist_ok=True)
+        _fsync_directory(directory.parent)
 
 
 class FilesystemCacheStore:
@@ -134,7 +173,7 @@ class FilesystemCacheStore:
         mutation_lock_timeout: float | None = None,
     ) -> None:
         self._root = root
-        self._root.mkdir(parents=True, exist_ok=True)
+        _durable_mkdir(self._root)
         # FROZEN CAS layout contract: a producer's origin dir and a consumer's cache both
         # address objects via these exact subdirs/names. Renaming any breaks existing stores.
         self._prepare_directory("chunks")
@@ -160,12 +199,13 @@ class FilesystemCacheStore:
 
     def _store_path(self, relpath: str) -> Path:
         try:
+            _refuse_symlink_components(self._root, relpath)
             return resolve_within(self._root, relpath)
         except UnsafePathError as exc:
             raise IntegrityError(str(exc)) from exc
 
     def _prepare_directory(self, name: str) -> None:
-        (self._root / name).mkdir(parents=True, exist_ok=True)
+        _durable_mkdir(self._root / name)
         self._store_path(name)
 
     def _chunk_path(self, chunk_hash: str) -> Path:
@@ -177,16 +217,24 @@ class FilesystemCacheStore:
         return self._store_path(f"manifests/{digest}")
 
     def has_chunk(self, chunk_hash: str) -> bool:
-        return self._chunk_path(chunk_hash).is_file()
+        path = self._chunk_path(chunk_hash)
+        _refuse_symlink(path)
+        return path.is_file()
 
     def put_chunk(self, plaintext: bytes) -> str:
         chunk_hash = _sha256(plaintext)
         path = self._chunk_path(chunk_hash)
-        if path.is_file():
-            return chunk_hash  # idempotent: content-addressed, never rewritten
-        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.is_file() and self._chunk_matches(chunk_hash, plaintext):
+            return chunk_hash
+        _durable_mkdir(path.parent)
         _atomic_write(path, zstandard.compress(plaintext))
         return chunk_hash
+
+    def _chunk_matches(self, chunk_hash: str, plaintext: bytes) -> bool:
+        try:
+            return self.get_chunk(chunk_hash) == plaintext
+        except IntegrityError:
+            return False
 
     def put_chunk_compressed(self, chunk_hash: str, compressed: bytes) -> None:
         """Store the producer's verbatim zstd bytes, then verify fail-closed.
@@ -197,11 +245,12 @@ class FilesystemCacheStore:
         bad file and raise :class:`IntegrityError`.
         """
         path = self._chunk_path(chunk_hash)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        _durable_mkdir(path.parent)
         _atomic_write(path, compressed)
         self._verify_or_remove(path, chunk_hash)
 
     def _verify_or_remove(self, path: Path, chunk_hash: str) -> None:
+        _refuse_symlink(path)
         try:
             plaintext = _decompress(path.read_bytes(), self._max_decompressed_bytes)
             if _sha256(plaintext) != chunk_hash:
@@ -211,9 +260,9 @@ class FilesystemCacheStore:
             raise
 
     def get_chunk(self, chunk_hash: str) -> bytes:
-        plaintext = _decompress(
-            self._chunk_path(chunk_hash).read_bytes(), self._max_decompressed_bytes
-        )
+        path = self._chunk_path(chunk_hash)
+        _refuse_symlink(path)
+        plaintext = _decompress(path.read_bytes(), self._max_decompressed_bytes)
         if _sha256(plaintext) != chunk_hash:
             raise IntegrityError(f"chunk {chunk_hash} failed content-address check")
         return plaintext
@@ -230,7 +279,9 @@ class FilesystemCacheStore:
         _atomic_write(target, data)
 
     def get_manifest(self, manifest_hash: str) -> bytes:
-        raw = self._manifest_path(manifest_hash).read_bytes()
+        path = self._manifest_path(manifest_hash)
+        _refuse_symlink(path)
+        raw = path.read_bytes()
         if _sha256(raw) != manifest_hash:
             raise IntegrityError(f"manifest {manifest_hash} failed content-address check")
         return raw
@@ -298,15 +349,24 @@ class FilesystemCacheStore:
 
     def _sweep_chunks(self, keep: set[str]) -> int:
         removed = 0
-        for path in self._store_path("chunks").glob("*/*"):
+        for path in self._chunk_files():
+            _refuse_symlink(path)
             if path.is_file() and path.name not in keep:
                 path.unlink()
                 removed += 1
         return removed
 
+    def _chunk_files(self) -> Iterator[Path]:
+        for shard in self._store_path("chunks").iterdir():
+            _refuse_symlink(shard)
+            if not shard.is_dir():
+                raise IntegrityError("chunk shard must be a real directory")
+            yield from shard.iterdir()
+
     def _sweep_manifests(self, keep: str) -> int:
         removed = 0
         for path in self._store_path("manifests").iterdir():
+            _refuse_symlink(path)
             if path.is_file() and path.name != keep:
                 path.unlink()
                 removed += 1
@@ -322,8 +382,9 @@ def _parse_active(active: Path) -> VersionPointer:
     escaping the trust boundary.
     """
     try:
+        _refuse_symlink(active)
         return VersionPointer.model_validate_json(active.read_bytes())
-    except (OSError, ValidationError) as exc:
+    except (IntegrityError, OSError, ValidationError) as exc:
         raise IntegrityError("active pointer exists but could not be read") from exc
 
 

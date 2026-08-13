@@ -64,7 +64,10 @@ Invariants — the security model in one screen:
 - `route` never fetches a model. No local model configured means the query is refused
   (`config.missing`), not served by way of a download.
 
-The four CLI verbs map one-to-one onto the four stages. `keygen` is one-time. `publish` runs on the build host whenever you cut a release. `sync` and `route` run on the device.
+Four CLI verbs map one-to-one onto the lifecycle stages: `keygen` is one-time, `publish` runs
+on the build host, and `sync` plus `route` run on the device. Three administrative commands
+complete the shipped CLI: `version` reports the package identity, `list-runtimes` shows runtime
+availability, and `gc` reclaims unreferenced bundle objects behind the mutation lock.
 
 ## Content-addressed store and manifest
 
@@ -95,9 +98,18 @@ Chunk-level deduplication is the reason `v1.0.0 → v1.0.1` is a delta, not a fu
 | `edgeproc.core` | `edgeproc/core/` | (default) | `Task`, `ResultEnvelope`, `RuntimeRegistry`, deterministic `Router`, `EdgeProcSettings` |
 | `edgeproc.localvec` | `edgeproc/localvec/` | `[localvec]` | `TextEncoder` and the fail-closed `model_source` resolver behind it, `FaissVectorIndex`, `KeywordSearcher` (BM25), reciprocal-rank fusion, `LocalVecRuntime` |
 | `edgeproc.bundles` | `edgeproc/bundles/` | `[bundles]` | content-defined chunking (GearCDC), zstd compression, ed25519 signing, manifest types, `sync_index`, `FetchAdapter` (HTTP + filesystem) |
-| `edgeproc.cli` | `edgeproc/cli/` | (default) | Typer entrypoints: `keygen`, `publish`, `sync`, `route` |
+| `edgeproc.cli` | `edgeproc/cli/` | (default) | Typer entrypoints: `version`, `list-runtimes`, `sync`, `keygen`, `publish`, `route`, `gc` |
 
 Heavy dependencies are opt-in. Installing the core gives you `Task`, the router, and the CLI shell. `[localvec]` brings FAISS + sentence-transformers. `[bundles]` brings cryptography + zstandard.
+
+`FaissVectorIndex.save()` treats the FAISS binary and metadata as one value: it flushes
+generation-addressed files, then publishes one atomic manifest. Save, writable load,
+migration, and GC share a bounded cross-process lock, and only the current plus previous
+complete generation remain. Stable read-only loads do not take that lock: they pin the
+selected files before digest verification and retry when concurrent cleanup changes the
+manifest set. A valid immutable legacy pair loads without migration or other writes. Three
+unstable observations fail closed rather than returning a hybrid. An interrupted generation
+is never paired with another generation's sidecar.
 
 ## Where the seams are
 

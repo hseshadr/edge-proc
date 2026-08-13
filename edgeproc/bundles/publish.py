@@ -151,14 +151,30 @@ def _lay_out_origin(
     root = store.root
     (root / "chunk").mkdir(parents=True, exist_ok=True)
     (root / "manifest").mkdir(parents=True, exist_ok=True)
+    _require_flat_directory(root / "chunk")
+    _require_flat_directory(root / "manifest")
     store.write_atomic(f"manifest/{pointer.manifest_hash}", canonical_bytes(manifest))
     wanted = {ref.hash for entry in manifest.files for ref in entry.chunks}
-    for chunk_hash in wanted:
-        dst = root / "chunk" / chunk_hash
-        if dst.exists():
-            continue
-        _link_or_copy(_store_chunk_path(store, chunk_hash), dst)
+    _publish_chunks(store, wanted)
+    _fsync_directory(root / "chunk")
     store.write_atomic("latest", pointer.model_dump_json().encode("utf-8"))
+
+
+def _publish_chunks(store: FilesystemCacheStore, chunk_hashes: set[str]) -> None:
+    for chunk_hash in chunk_hashes:
+        _publish_chunk(store, chunk_hash)
+
+
+def _publish_chunk(store: FilesystemCacheStore, chunk_hash: str) -> None:
+    src = _store_chunk_path(store, chunk_hash)
+    dst = store.root / "chunk" / chunk_hash
+    _require_regular_leaf(dst, "published chunk")
+    if not dst.exists():
+        _link_or_copy(src, dst)
+        return
+    source_bytes = src.read_bytes()
+    if dst.read_bytes() != source_bytes:
+        store.write_atomic(f"chunk/{chunk_hash}", source_bytes)
 
 
 def _store_chunk_path(store: FilesystemCacheStore, chunk_hash: str) -> Path:
@@ -172,3 +188,28 @@ def _link_or_copy(src: Path, dst: Path) -> None:
         os.link(src, dst)
     except OSError:
         shutil.copy2(src, dst)
+        _fsync_file(dst)
+
+
+def _fsync_file(path: Path) -> None:
+    with path.open("rb") as handle:
+        os.fsync(handle.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    fd = os.open(path, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _require_flat_directory(path: Path) -> None:
+    if path.is_symlink() or not path.is_dir():
+        raise ValueError("flat origin directory must be a real directory, not a symlink")
+
+
+def _require_regular_leaf(path: Path, label: str) -> None:
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ValueError(f"{label} must be a regular file, not a symlink or non-file")

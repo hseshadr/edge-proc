@@ -25,7 +25,7 @@ take about a minute. The simulated device never downloads it: the model travels 
 the signed bundle. If you want to inspect every command and its output before running it,
 continue to [See it work](#see-it-work).
 
-**Artifact status:** This README documents EdgeProc 0.4.0. The
+**Artifact status:** This README documents EdgeProc 0.4.1. The
 [PyPI project](https://pypi.org/project/edge-proc/) is the source of truth for versions
 available from the registry; the [changelog](CHANGELOG.md) separates shipped behavior
 from unreleased work.
@@ -147,8 +147,7 @@ du -sh model
 ```
 
 ```text
-index.faiss
-state.json
+snapshots/
  87M	model
 ```
 
@@ -201,7 +200,7 @@ uv run edgeproc sync \
 ```
 
 ```text
-synced v1.0.0 manifest=4587411eea91 chunks_fetched=2151 chunks_reused=0 bytes_fetched=83388300
+synced v1.0.0 manifest=4587411eea91 chunks_fetched=2152 chunks_reused=0 bytes_fetched=83404167
 ```
 
 83 MB, because this is the first sync and the model is most of it. Later syncs move kilobytes —
@@ -245,13 +244,14 @@ uv run edgeproc sync --base-url origin --cache-dir cache --key keys/public.key -
 ```
 
 ```text
-synced v1.0.0 manifest=4587411eea91 chunks_fetched=0 chunks_reused=2151 bytes_fetched=0
+synced v1.0.0 manifest=4587411eea91 chunks_fetched=0 chunks_reused=2152 bytes_fetched=0
 ```
 
-**A small edit ships as a small delta.** Publish `1.0.1` with one line appended, then re-sync:
+**A small edit ships as a small delta.** Add a tiny signed release note without touching the
+valid snapshot, publish `1.0.1`, then re-sync:
 
 ```bash
-echo "tiny edit" >> src/catalog_idx/state.json
+printf 'tiny edit\n' > src/release-note.txt
 
 uv run edgeproc publish --src src --origin-dir origin --key keys/private.key \
     --bundle-id catalog --version 1.0.1 --pretty
@@ -261,11 +261,11 @@ uv run edgeproc sync --base-url origin --cache-dir cache --key keys/public.key \
 
 ```text
 published v1.0.1 manifest=3f0941c9725a
-synced v1.0.1 manifest=3f0941c9725a chunks_fetched=1 chunks_reused=2150 bytes_fetched=157
+synced v1.0.1 manifest=3f0941c9725a chunks_fetched=1 chunks_reused=2152 bytes_fetched=19
 ```
 
-157 bytes instead of 83 MB — it re-fetched the one chunk that changed and reused the other
-2,150, model included.
+19 compressed bytes instead of 83 MB — it fetched the one new chunk and reused the other
+2,152, model included. The snapshot under `src/catalog_idx/snapshots/` remains valid.
 
 **No model, no answers.** Drop `--model-path` and `route` refuses. It does not fall back to
 downloading one, which is the whole reason step 5 can run on an unplugged machine:
@@ -312,7 +312,7 @@ chunks
 manifests
 ```
 
-Compare that to the healthy `cache/`, which has an `active` directory. `cache3/` never got one:
+Compare that to the healthy `cache/`, which has an `active` pointer file. `cache3/` never got one:
 the bad version was never promoted, and a device in this state keeps serving the last good
 version instead of silently serving corrupted data.
 
@@ -401,8 +401,8 @@ uv sync --all-extras   # core + extras + dev tooling
 ```
 
 That Just Works — `edgeproc-core` resolves from
-[PyPI](https://pypi.org/project/edgeproc-core/) (`edgeproc-core>=0.2.1`, the first
-release shipping the `edgeproc_core` import package), so `uv sync` fetches
+[PyPI](https://pypi.org/project/edgeproc-core/) (`edgeproc-core>=0.4.2`, the supported
+core line), so `uv sync` fetches
 everything; nothing else to clone. Co-developing `edgeproc-core` alongside
 EdgeProc? Clone it next to this repo and add the path override commented in
 `pyproject.toml`.
@@ -446,6 +446,16 @@ Chunking is content-defined (GearCDC) and chunks are zstd-compressed. Add `--htt
 serving `origin/` over any static HTTP server or CDN, to go over the wire instead of the
 filesystem; the contract is identical and only the transport changes.
 
+Local vector snapshots are generation-addressed: a writer flushes the FAISS and state files,
+then exposes both with one atomic manifest commit. Writes, writable loads, migration, and
+snapshot cleanup share a bounded cross-process lock. **Stable read-only loads do not take that
+lock**: they pin open descriptors for one observed generation, verify both digests through
+those handles, and retry if concurrent cleanup changes the manifest set. On an immutable
+legacy 0.4.0 directory, a valid two-file pair can be read directly without creating a snapshot
+directory, migrating, or deleting either source file. A reader gets three attempts to observe
+a stable manifest set; continuing writer/GC churn then fails closed instead of returning a
+hybrid snapshot.
+
 ### Configuration: `EdgeProcSettings` + `EDGEPROC_`-prefixed env vars
 
 Deploy-time config is read lazily from the environment / `.env` via `EdgeProcSettings`
@@ -464,6 +474,7 @@ ecosystem-standard `HF_TOKEN`):
 | `default_k` | `EDGEPROC_DEFAULT_K` | `10` | Default top-k results. |
 | `http_timeout` | `EDGEPROC_HTTP_TIMEOUT` | `30.0` | Bundle HTTP fetch timeout (s). |
 | `mutation_lock_timeout` | `EDGEPROC_MUTATION_LOCK_TIMEOUT` | `30.0` | Bounded cross-process publish/sync/promote/GC lock wait (s). |
+| `snapshot_lock_timeout` | `EDGEPROC_SNAPSHOT_LOCK_TIMEOUT` | `30.0` | Bounded cross-process FAISS save/load/migration/GC lock wait (s). |
 | `task_budget_ms` | `EDGEPROC_TASK_BUDGET_MS` | `5000` | Default per-task latency budget. |
 | `task_budget_memory_mb` | `EDGEPROC_TASK_BUDGET_MEMORY_MB` | `256` | Default per-task memory budget. |
 | `max_in_flight_memory_mb` | `EDGEPROC_MAX_IN_FLIGHT_MEMORY_MB` | `512` | Sum of declared task reservations admitted concurrently by one `EdgeProc` instance. |
@@ -475,7 +486,7 @@ ecosystem-standard `HF_TOKEN`):
 | `rrf_k_window` | `EDGEPROC_RRF_K_WINDOW` | `60` | RRF rank-window constant for hybrid fusion. |
 | `trust_root_pubkey_path` | `EDGEPROC_TRUST_ROOT_PUBKEY_PATH` | `None` | Pinned sync trust-root pubkey (no key ⇒ `sync` refused). |
 
-That is the complete set — all 18 fields of `EdgeProcSettings`. A test asserts this table
+That is the complete set — all 19 fields of `EdgeProcSettings`. A test asserts this table
 matches the settings object field-for-field, so a new setting cannot ship undocumented.
 
 One more environment variable exists that is deliberately **not** an `EdgeProcSettings`
@@ -545,7 +556,9 @@ uv sync --all-extras   # core + extras + dev tooling
 uv run poe gate        # lint + format-check + mypy strict + Radon Grade A + pytest (≥90% statement+branch cov)
 ```
 
-`poe gate` mirrors CI exactly — if it passes locally, CI passes.
+`poe gate` mirrors only the hosted `CI / gate` job. The separate hosted `Secret scan / gitleaks`
+job examines the commit range introduced by a push or pull request, so a green local gate is
+not evidence that the hosted secret scan ran or passed.
 
 ## About
 

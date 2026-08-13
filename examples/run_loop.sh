@@ -30,7 +30,7 @@ banner "2. BUILD MACHINE — index examples/catalog.json and save the model besi
 # This is the one step permitted to use the network, and it says so out loud. EdgeProc
 # refuses model downloads by default; a build machine opts in, a device never does. The
 # model lands in $WORK/src/model so step 3 signs it into the same bundle as the index —
-# that is what makes step 5's "no network" real rather than a warm-cache accident.
+# that is what makes step 6's "no network" real rather than a warm-cache accident.
 EDGEPROC_ALLOW_MODEL_DOWNLOAD=1 "${PYTHON[@]}" "$HERE/quickstart.py" \
     --catalog "$HERE/catalog.json" \
     --out "$WORK/src/catalog_idx" \
@@ -53,7 +53,23 @@ banner "4. sync — pull onto a fresh consumer cache, verifying against the pinn
     --materialize-to "$WORK/materialized" \
     --pretty
 
-banner "5. DEVICE — route a SEARCH task using only what sync verified, no network"
+banner "5. delta — add one tiny signed file and fetch only its new chunk"
+printf 'tiny edit\n' > "$WORK/src/release-note.txt"
+"${EDGEPROC[@]}" publish \
+    --src "$WORK/src" \
+    --origin-dir "$WORK/origin" \
+    --key "$WORK/keys/private.key" \
+    --bundle-id catalog \
+    --version 1.0.1 \
+    --pretty
+"${EDGEPROC[@]}" sync \
+    --base-url "$WORK/origin" \
+    --cache-dir "$WORK/cache" \
+    --key "$WORK/keys/public.key" \
+    --materialize-to "$WORK/materialized" \
+    --pretty
+
+banner "6. DEVICE — route a SEARCH task using only what sync verified, no network"
 # --model-path points at the model that arrived inside the signed bundle. No
 # EDGEPROC_ALLOW_MODEL_DOWNLOAD here on purpose: if the model had not shipped in step 3,
 # this refuses with [config.missing] rather than quietly fetching it from the hub.
@@ -78,7 +94,7 @@ env HF_HOME="$WORK/cold-hf" \
     --model-path "$WORK/materialized/model" \
     --pretty
 
-banner "6. the guard, shown refusing — same device, same cold cache, no local model"
+banner "7. the guard, shown refusing — same device, same cold cache, no local model"
 # A guard nobody has watched fail is not evidence. Drop --model-path and the identical
 # command must REFUSE, not quietly fetch 87 MB from huggingface.co. Non-zero exit here is
 # the expected outcome, so the script asserts the refusal instead of aborting on it.

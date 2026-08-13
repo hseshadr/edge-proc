@@ -26,9 +26,9 @@ jobs:
       - name: Pin Python
         run: uv python install 3.13
 
-      # edgeproc-core is pulled from public GitHub via the git source pinned
-      # in pyproject.toml — exactly what an external cloner gets. --frozen: install
-      # the committed uv.lock verbatim, so CI cannot silently re-resolve.
+      # edgeproc-core>=0.4.2 resolves from PyPI under the committed lock — exactly what an
+      # external cloner gets. --frozen installs uv.lock verbatim, so CI cannot silently
+      # re-resolve a different dependency set.
       - name: Install dependencies (core + extras + dev)
         run: uv sync --frozen --all-extras
 

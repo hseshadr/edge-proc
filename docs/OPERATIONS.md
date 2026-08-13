@@ -67,20 +67,40 @@ responsibility.
 
 - **Crash-atomic activation:** the active pointer is a same-filesystem, fsynced atomic
   replace. Publisher `latest` and manifest artifacts use the same primitive. A reader
-  observes the old pointer or the new pointer, never a torn pointer.
+  observes the old pointer or the new pointer, never a torn pointer. The flat published
+  `chunk/` and `manifest/` directories must be real directories; symlinks are refused.
+  Object and pointer leaves are held to the same rule, including same-root symlinks.
 - **Fail-closed retry:** signature, hash, path, size, rollback, fetch, or lock failures do
   not promote the candidate. Verified inactive chunks may remain and are safely reused.
 - **Concurrent mutation:** one cross-process lock covers fetch/verify/promote versus GC and
   makes the monotonic check/write indivisible. The default wait is 30 seconds; timeout is a
   typed `IntegrityError` and the caller should retry with jitter.
 - **Local vector state:** `FaissVectorIndex` serializes insert, rebuild, delete, search,
-  statistics, and staged persistence transitions per instance. Its save path validates
-  the index/metadata pair on load and atomically replaces both files. This guard is
-  process-local; applications sharing one index path across processes must provide an
-  external single-writer lock.
+  and statistics per instance. Persistence is also cross-process: save, writable load,
+  legacy migration, and snapshot GC share one bounded file lock. A save writes
+  generation-addressed FAISS and state files, flushes them, then publishes
+  one atomic manifest commit and durable parent-directory links. Digests stream in fixed-size
+  blocks, so verification does not copy a multi-gigabyte FAISS file into Python memory. Stable
+  read-only loads do not take that lock: they enumerate a stable manifest set, pin open
+  descriptors for the selected generation, verify both digests from those handles, and retry
+  if a concurrent writer or GC changes the set. If the directory is an immutable legacy 0.4.0
+  pair, a structurally valid pair loads directly without creating `snapshots/`, migrating,
+  deleting, or otherwise writing. Every generation load accepts only a digest-matched complete
+  commit. The read-only path makes three attempts to observe a stable manifest set, then fails
+  closed with an operational `ValueError` if churn continues; it never returns a hybrid
+  generation. An instance loaded from a generation also compare-and-swaps its
+  selected generation during save: if another process committed first, save raises
+  `SnapshotConflictError`; reload, reapply the intended mutation, and retry. It
+  recovers the previous complete generation when the newest commit is corrupt, retains only
+  those two generations, and migrates a valid 0.4.0 two-file directory on first load. A
+  post-commit cleanup failure emits a warning log but does not misreport the already-active
+  save as failed; the next save retries cleanup. Snapshot roots and internal directories must
+  be real directories—symlinks and non-directories are refused before any snapshot write.
+  Committed manifest, FAISS, and state leaves must be regular files; symlinks are never read.
 - **Resource ceilings:** defaults are a 30-second HTTP client timeout per network
   operation, 256 MiB per response, 64 MiB decompressed per chunk, 4 GiB and 100,000 files
-  per sync, 256 MiB per materialized file, and a 30-second mutation lock wait. Total sync time still scales with the
+  per sync, 256 MiB per materialized file, and 30-second mutation and vector-snapshot lock
+  waits. Total sync time still scales with the
   signed chunk count and origin latency. Operators should lower these limits for smaller
   catalogs and place a host-level deadline around the command when they require one.
 - **Materialization:** CAS activation is atomic; writing a multi-file
@@ -125,19 +145,19 @@ on the consumer's model, hardware, and origin and must be measured in the embedd
 **This table is the single source for EdgeProc's performance figures.** They are stated
 here and nowhere else — no other document restates them, so there is nothing to drift.
 
-Measured 2026-07-20 on a clean build (`rm -rf .venv && uv sync --all-extras`), macOS 26.5
-arm64 (Apple silicon laptop), CPython 3.13.5, commit at the time of measurement:
+Measured 2026-08-13 on macOS 26.5 arm64 (Apple silicon laptop), CPython 3.13.5,
+from the 0.4.1 release candidate after the full local gate:
 
 | metric | p50 | p95 | gate budget |
 |---|---|---|---|
-| vector search | 0.075 ms | 0.097 ms | 100.0 ms |
-| cold sync | 54.181 ms | 82.444 ms | 750.0 ms |
-| warm sync | 16.016 ms | 16.464 ms | 250.0 ms |
+| vector search | 0.065 ms | 0.084 ms | 100.0 ms |
+| cold sync | 51.494 ms | 51.936 ms | 750.0 ms |
+| warm sync | 14.838 ms | 17.226 ms | 250.0 ms |
 
-Peak process RSS was 114.0 MiB against the 512 MiB budget.
+Peak process RSS was 116.75 MiB against the 512 MiB budget.
 
 Read the p95 column as a shape, not a constant. Cold sync is the noisiest metric: two
-consecutive runs on this same machine reported 52.6 ms and 82.4 ms, because seven cold
+consecutive runs on this same machine can vary materially, because seven cold
 syncs give the 95th percentile very few samples and each one is dominated by filesystem
 behavior the library does not control. The table records the slower run deliberately —
 an optimistic number is the more dangerous error. This is also why the drift test in
@@ -150,12 +170,23 @@ every consumer, and the budgets above — not these figures — are what the gat
 
 ## Release evidence
 
-A release is eligible only when `uv run poe gate`, `sh examples/run_loop.sh`,
-`uv run python benchmarks/benchmark.py`, the secret scan, dependency audit,
-and CI all pass on the exact commit. Record the immutable commit/tag and benchmark JSON;
-do not infer production truth from a different local tree.
+A release is eligible only when `uv run poe gate`, `bash examples/run_loop.sh`,
+`uv run python benchmarks/benchmark.py`, the secret scan, and dependency audit all pass on the
+exact commit. The tag-triggered `publish.yml` workflow first requires the tag to identify the
+exact current `main` commit with green hosted `gate`, `Secret scan / gitleaks`, and `pip-audit`
+checks. It then runs all five checks itself because tag creation does not trigger `ci.yml`.
+Before building, it verifies the exact tag/version/top-changelog identity; before OIDC upload,
+it verifies both built artifacts' project and version metadata. Record the immutable commit/tag
+and benchmark JSON; do not infer production truth from a different local tree.
 
-The secret scan is the shared `hseshadr/ci` brick, called from `ci.yml`. It scans the
-commit range of each push or PR, not the whole repository — see the "no key material in
-the tree" invariant in `CLAUDE.md`. To sweep the entire history before a release, run
-`gitleaks detect` locally against a full clone.
+Build and validation run in an unprivileged job that records the archive SHA-256 digests and
+uploads one short-lived workflow artifact. The OIDC-bearing job only downloads and re-verifies
+those archives with the runner standard library and coreutils before invoking the official PyPI
+publisher; it does not check out source, install dependencies, or execute the build backend.
+Registry propagation verification runs afterward in a third job without OIDC permission.
+
+The local `poe gate` mirrors only the hosted `CI / gate` job. The separate hosted
+`Secret scan / gitleaks` job is the shared `hseshadr/ci` brick called from `ci.yml`; it scans
+the commit range of each push or PR, not the whole repository. The tag workflow independently
+scans the full Git history from the tagged checkout before the OIDC-bearing job becomes
+reachable. See the "no key material in the tree" invariant in `CLAUDE.md`.

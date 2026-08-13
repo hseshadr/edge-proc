@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner, Result
 
+from edgeproc.bundles import publish
 from edgeproc.bundles.cas import FilesystemCacheStore
 from edgeproc.bundles.chunking import GearCDC
 from edgeproc.bundles.manifest import VersionPointer, pointer_signing_bytes
@@ -76,6 +77,92 @@ def test_build_bundle_round_trips_into_fresh_store(tmp_path: Path) -> None:
     assert len(faiss.chunks) >= 2  # the >256 KiB file really split
 
 
+def test_origin_chunks_are_durable_before_latest_is_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    origin = tmp_path / "origin"
+    chunk_directory_synced = False
+    real_fsync_directory = publish._fsync_directory
+    real_write = FilesystemCacheStore.write_atomic
+
+    def record_directory(path: Path) -> None:
+        nonlocal chunk_directory_synced
+        if path == origin / "chunk":
+            chunk_directory_synced = True
+        real_fsync_directory(path)
+
+    def assert_order(store: FilesystemCacheStore, relative_path: str, data: bytes) -> None:
+        if relative_path == "latest":
+            assert chunk_directory_synced
+        real_write(store, relative_path, data)
+
+    monkeypatch.setattr(publish, "_fsync_directory", record_directory)
+    monkeypatch.setattr(FilesystemCacheStore, "write_atomic", assert_order)
+    private, _ = generate_keypair()
+    _publish(origin, Ed25519Signer(private), _FILES, "1.0.0")
+
+    assert all(path.is_file() for path in (origin / "chunk").iterdir())
+    assert chunk_directory_synced
+
+
+def test_origin_copy_fallback_fsyncs_each_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    origin = tmp_path / "origin"
+    synced_files: list[Path] = []
+
+    def fail_link(_src: object, _dst: object) -> None:
+        raise OSError("simulate unsupported hardlinks")
+
+    def record(path: Path) -> None:
+        synced_files.append(path)
+
+    monkeypatch.setattr(os, "link", fail_link)
+    monkeypatch.setattr(publish, "_fsync_file", record)
+    private, _ = generate_keypair()
+    _publish(origin, Ed25519Signer(private), _FILES, "1.0.0")
+    assert set(synced_files) == set((origin / "chunk").iterdir())
+
+
+@pytest.mark.parametrize("directory_name", ["chunk", "manifest"])
+def test_publish_refuses_symlinked_flat_origin_directories(
+    tmp_path: Path, directory_name: str
+) -> None:
+    origin = tmp_path / "origin"
+    outside = tmp_path / "outside"
+    origin.mkdir()
+    outside.mkdir()
+    (origin / directory_name).symlink_to(outside, target_is_directory=True)
+    private, _ = generate_keypair()
+
+    with pytest.raises(ValueError, match="origin directory"):
+        _publish(origin, Ed25519Signer(private), _FILES, "1.0.0")
+    assert list(outside.iterdir()) == []
+
+
+def test_publish_refuses_existing_symlinked_flat_chunk_leaf(tmp_path: Path) -> None:
+    origin = tmp_path / "origin"
+    store = FilesystemCacheStore(origin)
+    payload = b"leaf containment"
+    digest = store.put_chunk(payload)
+    (origin / "chunk").mkdir()
+    victim = origin / "victim"
+    victim.write_bytes((origin / "chunks" / digest[:2] / digest).read_bytes())
+    (origin / "chunk" / digest).symlink_to(victim)
+    private, _ = generate_keypair()
+
+    with pytest.raises(ValueError, match="published chunk"):
+        build_bundle(
+            files={"leaf.bin": payload},
+            store=store,
+            chunker=GearCDC(),
+            signer=Ed25519Signer(private),
+            bundle_id="b",
+            version="1.0.0",
+        )
+    assert not (origin / "latest").exists()
+
+
 def test_republish_unchanged_catalog_touches_zero_chunk_files(tmp_path: Path) -> None:
     """A second ``build_bundle`` over the same files mustn't rewrite existing chunks."""
     private, _public = generate_keypair()
@@ -90,6 +177,24 @@ def test_republish_unchanged_catalog_touches_zero_chunk_files(tmp_path: Path) ->
 
     # Same inode for every chunk → not rewritten (hardlink reused, not replaced).
     assert pre == post
+
+
+def test_republish_repairs_a_corrupted_existing_chunk_before_latest(tmp_path: Path) -> None:
+    private, public = generate_keypair()
+    origin = tmp_path / "origin"
+    signer = Ed25519Signer(private)
+    _publish(origin, signer, _FILES, "1.0.0")
+    published_chunk = next((origin / "chunk").iterdir())
+    published_chunk.write_bytes(b"not zstd")
+
+    pointer = _publish(origin, signer, _FILES, "1.0.1")
+
+    verifier = Ed25519Verifier.from_public_bytes(public.public_bytes_raw())
+    fresh = FilesystemCacheStore(tmp_path / "fresh")
+    sync_index(base_url=str(origin), store=fresh, adapter=_fs_adapter(), verifier=verifier)
+    manifest = _manifest_at(origin, pointer)
+    for path, original in _FILES.items():
+        assert materialize_file(fresh, manifest, path) == original
 
 
 def test_publish_crash_keeps_previous_latest(
@@ -315,6 +420,34 @@ def test_cli_publish_refuses_an_empty_src_directory(tmp_path: Path) -> None:
     assert "Traceback" not in result.stderr
     assert "no files to publish" in result.stderr
     assert not (tmp_path / "origin").exists()  # nothing was minted
+
+
+def test_cli_publish_refuses_a_symlinked_source_file(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    src.mkdir()
+    secret = tmp_path / "outside-secret"
+    secret.write_bytes(b"must not be published")
+    (src / "linked-secret").symlink_to(secret)
+
+    result = _publish_src(tmp_path, src)
+
+    assert result.exit_code == 1
+    assert "symlink" in result.stderr
+    assert not (tmp_path / "origin").exists()
+
+
+def test_cli_publish_refuses_a_symlinked_source_root(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret").write_bytes(b"must not be published")
+    src = tmp_path / "src"
+    src.symlink_to(outside, target_is_directory=True)
+
+    result = _publish_src(tmp_path, src)
+
+    assert result.exit_code == 1
+    assert "symlink" in result.stderr
+    assert not (tmp_path / "origin").exists()
 
 
 def test_cli_publish_bind_identity_then_sync_with_matching_pin(tmp_path: Path) -> None:

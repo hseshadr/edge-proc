@@ -15,8 +15,7 @@ strategies.
 from __future__ import annotations
 
 import asyncio
-import os
-from contextlib import AbstractContextManager
+import errno
 from pathlib import Path
 from threading import RLock
 from typing import ClassVar, Final
@@ -31,19 +30,29 @@ from edgeproc_core.vector_mgmt.core.types import (
     Scalar,
     VectorEmbedding,
 )
+from filelock import BaseFileLock, FileLock
 from numpy.typing import NDArray
 from pydantic import BaseModel
 
+from edgeproc.core.settings import EdgeProcSettings
 from edgeproc.errors import CONFIG_INVALID
+from edgeproc.localvec.snapshot_store import (
+    NoSnapshotError,
+    SnapshotPayload,
+    SnapshotRevision,
+    SnapshotStore,
+    open_regular_leaf,
+    read_regular_bytes,
+)
+from edgeproc.localvec.snapshot_store import SnapshotConflictError as _SnapshotConflictError
 
-# FROZEN on-disk contract: a saved index dir is addressed by these exact filenames, so
-# load() can find a save()d index across versions. Renaming either breaks existing dirs.
+SnapshotConflictError = _SnapshotConflictError
+
+# Legacy 0.4.0 on-disk contract. New saves use generation-addressed snapshots; these names
+# remain reserved so load() can migrate an existing directory without data loss.
 _INDEX_FILE: Final[str] = "index.faiss"
 _STATE_FILE: Final[str] = "state.json"
-_INDEX_TEMP: Final[str] = ".index.faiss.tmp"
-_STATE_TEMP: Final[str] = ".state.json.tmp"
-_PERSISTENCE_LOCKS: dict[Path, AbstractContextManager[object]] = {}
-_PERSISTENCE_LOCKS_GUARD = RLock()
+_READ_ONLY_LOAD_ATTEMPTS: Final[int] = 3
 
 #: The one metric this backend computes. ``IndexFlatIP`` scores inner product, which over
 #: the unit-normalized vectors ``LocalEncoder`` emits IS cosine similarity; ``_collect``
@@ -101,13 +110,19 @@ class FaissVectorIndex:
         self._meta: dict[str, Metadata] = {}
         self._tombstoned: set[str] = set()
         self._lock = RLock()
+        self._snapshot_revision: SnapshotRevision | None = None
 
     def save(self, directory: Path) -> None:
         """Persist the FAISS index plus its id map, tombstones, and metadata."""
+        SnapshotStore.prepare_root(directory)
         with self._lock, _persistence_lock(directory):
-            directory.mkdir(parents=True, exist_ok=True)
             state = self._persisted_state()
-            _write_atomic_pair(directory, self._faiss, state)
+            store = SnapshotStore(directory)
+            self._snapshot_revision = store.commit(
+                lambda path: faiss.write_index(self._faiss, str(path)),
+                state.model_dump_json().encode("utf-8"),
+                self._snapshot_revision,
+            )
 
     def _persisted_state(self) -> _PersistedState:
         return _PersistedState(
@@ -120,13 +135,13 @@ class FaissVectorIndex:
     @classmethod
     def load(cls, index_name: str, directory: Path) -> FaissVectorIndex:
         """Reload an index previously written by :meth:`save`."""
-        with _persistence_lock(directory):
-            state = _PersistedState.model_validate_json((directory / _STATE_FILE).read_text())
-            faiss_index = faiss.read_index(str(directory / _INDEX_FILE))
-            _validate_persisted_index(faiss_index, state)
-            instance = cls(index_name, state.config)
-            instance._restore(faiss_index, state)
-            return instance
+        lock = _persistence_lock(directory)
+        acquired = _acquire_load_lock(lock)
+        try:
+            return _restore_persisted(index_name, directory, migrate_legacy=acquired)
+        finally:
+            if acquired:
+                lock.release()
 
     def _restore(self, faiss_index: faiss.Index, state: _PersistedState) -> None:
         self._faiss = faiss_index
@@ -163,21 +178,21 @@ class FaissVectorIndex:
             raise UnsupportedIndexOptionError(f"cannot honour ef_search: {_NO_GRAPH}")
         return await asyncio.to_thread(self._search_sync, query_vector, k, filters)
 
-    async def delete(self, entity_ids: list[str]) -> None:
+    async def delete(self, entity_ids: list[str], filters: Metadata | None = None) -> None:
         with self._lock:
             for entity_id in entity_ids:
-                if entity_id in self._live:
+                if entity_id in self._live and _passes(self._meta[entity_id], filters):
                     del self._live[entity_id]
                     del self._meta[entity_id]
                     del self._row_of[entity_id]
                     self._tombstoned.add(entity_id)
 
-    async def get_stats(self) -> IndexStats:
+    async def get_stats(self, filters: Metadata | None = None) -> IndexStats:
         with self._lock:
-            live = len(self._live)
+            live = sum(_passes(meta, filters) for meta in self._meta.values())
             # Count EVERY dead physical row — deleted ids AND rows superseded by a re-insert —
             # so the tombstone ratio that triggers rebuilds reflects the index's real bloat.
-            dead = int(self._faiss.ntotal) - live
+            dead = 0 if filters else int(self._faiss.ntotal) - live
             total = live + dead
             return IndexStats(
                 index_name=self.index_name,
@@ -322,34 +337,117 @@ def _passes(meta: Metadata, filters: Metadata | None) -> bool:
     return all(meta.get(key) == value for key, value in filters.items())
 
 
-def _persistence_lock(directory: Path) -> AbstractContextManager[object]:
-    key = directory.resolve()
-    with _PERSISTENCE_LOCKS_GUARD:
-        lock = _PERSISTENCE_LOCKS.get(key)
-        if lock is None:
-            lock = RLock()
-            _PERSISTENCE_LOCKS[key] = lock
-        return lock
+def _persistence_lock(directory: Path) -> BaseFileLock:
+    timeout = EdgeProcSettings().snapshot_lock_timeout
+    return FileLock(directory / ".snapshot.lock", timeout=timeout)
 
 
-def _write_atomic_pair(directory: Path, index: faiss.Index, state: _PersistedState) -> None:
-    index_temp = directory / _INDEX_TEMP
-    state_temp = directory / _STATE_TEMP
+def _acquire_load_lock(lock: BaseFileLock) -> bool:
+    """Acquire when writable; immutable mounts safely read committed generations unlocked."""
     try:
-        faiss.write_index(index, str(index_temp))
-        _fsync_file(index_temp)
-        state_temp.write_text(state.model_dump_json())
-        _fsync_file(state_temp)
-        os.replace(index_temp, directory / _INDEX_FILE)
-        os.replace(state_temp, directory / _STATE_FILE)
+        lock.acquire()
+    except OSError as exc:
+        if exc.errno not in {errno.EACCES, errno.EPERM, errno.EROFS}:
+            raise
+        return False
+    return True
+
+
+def _restore_persisted(
+    index_name: str, directory: Path, *, migrate_legacy: bool
+) -> FaissVectorIndex:
+    faiss_index, state, revision = _load_persisted(directory, migrate_legacy=migrate_legacy)
+    _validate_persisted_index(faiss_index, state)
+    instance = FaissVectorIndex(index_name, state.config)
+    instance._restore(faiss_index, state)
+    instance._snapshot_revision = revision
+    return instance
+
+
+def _load_persisted(
+    directory: Path, *, migrate_legacy: bool
+) -> tuple[faiss.Index, _PersistedState, SnapshotRevision | None]:
+    if migrate_legacy:
+        return _load_writable(directory)
+    return _load_read_only(directory)
+
+
+def _load_writable(
+    directory: Path,
+) -> tuple[faiss.Index, _PersistedState, SnapshotRevision]:
+    store = SnapshotStore(directory)
+    try:
+        payload = store.latest()
+    except NoSnapshotError:
+        return _migrate_legacy(directory, store)
+    index, state = _read_snapshot(payload)
+    return index, state, payload.revision
+
+
+def _load_read_only(
+    directory: Path,
+) -> tuple[faiss.Index, _PersistedState, SnapshotRevision | None]:
+    failure = FileNotFoundError("snapshot changed during read-only load")
+    for _attempt in range(_READ_ONLY_LOAD_ATTEMPTS):
+        try:
+            return _load_read_only_once(directory)
+        except FileNotFoundError as exc:
+            failure = exc
+    raise failure
+
+
+def _read_legacy_result(
+    directory: Path,
+) -> tuple[faiss.Index, _PersistedState, None]:
+    index, state = _read_legacy(directory)
+    return index, state, None
+
+
+def _load_read_only_once(
+    directory: Path,
+) -> tuple[faiss.Index, _PersistedState, SnapshotRevision | None]:
+    if not (directory / "snapshots").exists():
+        return _read_legacy_result(directory)
+    store = SnapshotStore(directory)
+    try:
+        payload = store.latest()
+    except NoSnapshotError:
+        return _read_legacy_result(directory)
+    index, state = _read_snapshot(payload)
+    return index, state, payload.revision
+
+
+def _read_snapshot(payload: SnapshotPayload) -> tuple[faiss.Index, _PersistedState]:
+    try:
+        state = _PersistedState.model_validate_json(payload.state_bytes)
+        # faiss exports this reader at runtime but omits it from its published stub.
+        reader = faiss.PyCallbackIOReader(payload.index_file.read)  # type: ignore[attr-defined]
+        return faiss.read_index(reader), state
     finally:
-        index_temp.unlink(missing_ok=True)
-        state_temp.unlink(missing_ok=True)
+        payload.close()
 
 
-def _fsync_file(path: Path) -> None:
-    with path.open("rb") as handle:
-        os.fsync(handle.fileno())
+def _read_legacy(directory: Path) -> tuple[faiss.Index, _PersistedState]:
+    index_file = open_regular_leaf(directory / _INDEX_FILE, "legacy FAISS index")
+    try:
+        state_bytes = read_regular_bytes(directory / _STATE_FILE, "legacy state sidecar")
+        reader = faiss.PyCallbackIOReader(index_file.read)  # type: ignore[attr-defined]
+        return faiss.read_index(reader), _PersistedState.model_validate_json(state_bytes)
+    finally:
+        index_file.close()
+
+
+def _migrate_legacy(
+    directory: Path, store: SnapshotStore
+) -> tuple[faiss.Index, _PersistedState, SnapshotRevision]:
+    index, state = _read_legacy(directory)
+    _validate_persisted_index(index, state)
+    revision = store.commit(
+        lambda path: faiss.write_index(index, str(path)), state.model_dump_json().encode()
+    )
+    (directory / _INDEX_FILE).unlink()
+    (directory / _STATE_FILE).unlink()
+    return index, state, revision
 
 
 def _validate_persisted_index(index: faiss.Index, state: _PersistedState) -> None:

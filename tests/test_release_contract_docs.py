@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT_FOR_IMPORT / "benchmarks"))
 from benchmark import BUDGETS  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-RELEASE_VERSION = "0.4.0"
+RELEASE_VERSION = "0.4.1"
 
 
 def _read(relative: str) -> str:
@@ -67,9 +67,88 @@ def test_release_copy_stays_true_before_and_after_registry_propagation() -> None
     readme = _read("README.md")
     workflow = _read(".github/workflows/publish.yml")
 
-    assert "This README documents EdgeProc 0.4.0" in readme
+    assert "This README documents EdgeProc 0.4.1" in readme
     assert "PyPI currently serves" not in readme
     assert "edge-proc is not yet on PyPI" not in workflow
+
+
+def test_corrective_release_marks_the_affected_version_superseded() -> None:
+    changelog = _read("CHANGELOG.md")
+    release_040 = changelog.split("## [0.4.0]", maxsplit=1)[1].split("## [0.3.1]", maxsplit=1)[0]
+    assert "superseded by 0.4.1" in release_040.lower()
+
+
+def test_roadmap_never_lists_the_live_pypi_distribution_as_future_work() -> None:
+    roadmap = _read("ROADMAP.md")
+    near_term = roadmap.split("## Near-term", maxsplit=1)[1].split("## Out of scope", maxsplit=1)[0]
+    assert "## Shipped (v0.4.1)" in roadmap
+    assert "EdgeProc currently installs from source / git" not in roadmap
+    assert "**PyPI distribution**" not in near_term
+
+
+def test_contributor_guide_names_the_real_registry_dependency_source() -> None:
+    guide = _read("CLAUDE.md")
+    assert "`edgeproc-core` resolves from PyPI" in guide
+    assert "resolves from public GitHub via a tag-pinned git source" not in guide
+
+
+def test_core_dependency_floor_excludes_superseded_releases() -> None:
+    assert '"edgeproc-core>=0.4.2"' in _read("pyproject.toml")
+    assert "`edgeproc-core>=0.4.2`" in _read("README.md")
+
+
+def test_security_policy_supports_only_the_current_release() -> None:
+    policy = _read("SECURITY.md")
+    assert "| 0.4.1   | :white_check_mark: |" in policy
+    assert "| < 0.4.1 | :x:                |" in policy
+    assert "| 0.1.x" not in policy
+
+
+def test_ci_documents_core_as_a_locked_pypi_dependency() -> None:
+    workflow = _read(".github/workflows/ci.yml")
+    assert "edgeproc-core>=0.4.2 resolves from PyPI" in workflow
+    assert "pulled from public GitHub via the git source" not in workflow
+
+
+def test_quickstart_does_not_freeze_a_stale_test_count() -> None:
+    quickstart = _read("docs/QUICKSTART.md")
+    assert "`uv run poe gate` | ~20 s, full test suite" in quickstart
+    assert not re.search(r"`uv run poe gate` \|[^\n]*\b\d+ tests\b", quickstart)
+
+
+def test_corrective_release_names_every_symlink_containment_fix() -> None:
+    section = (
+        _read("CHANGELOG.md").split("## [0.4.1]", maxsplit=1)[1].split("## [0.4.0]", maxsplit=1)[0]
+    )
+    release = " ".join(section.split())
+    assert "garbage collection refuses symlinked chunk shards and object leaves" in release
+    assert "The publisher refuses symlinks under `--src`" in release
+    assert "Read-only saved indexes load without writing their snapshot directory" in release
+    assert (
+        "Publishing verifies and repairs reused chunk objects before advancing `latest`" in release
+    )
+
+
+def test_operations_contract_explains_the_one_commit_snapshot_boundary() -> None:
+    operations = _read("docs/OPERATIONS.md")
+    assert "generation-addressed" in operations
+    assert "one atomic manifest commit" in operations
+    assert "previous complete generation" in operations
+
+
+@pytest.mark.parametrize("document", ["README.md", "docs/QUICKSTART.md"])
+def test_runnable_docs_never_edit_the_retired_legacy_snapshot_sidecar(document: str) -> None:
+    copy = _read(document)
+    assert "src/catalog_idx/state.json" not in copy
+    assert "src/catalog_idx/snapshots/" in copy
+
+
+@pytest.mark.parametrize("document", ["README.md", "docs/QUICKSTART.md"])
+def test_cache_docs_describe_active_as_a_pointer_file(document: str) -> None:
+    copy = _read(document)
+    assert "`active` pointer file" in copy
+    assert "`active` directory" not in copy
+    assert "`active/` directory" not in copy
 
 
 def test_budget_copy_distinguishes_admission_from_native_rss_enforcement() -> None:
@@ -221,3 +300,71 @@ def test_readme_defers_percentile_figures_to_the_operations_contract() -> None:
     assert restated == [], (
         f"README restates percentile figures {restated}; link to docs/OPERATIONS.md instead"
     )
+
+
+@pytest.mark.parametrize("document", ["README.md", "docs/QUICKSTART.md"])
+def test_local_gate_claim_separates_the_hosted_secret_scan(document: str) -> None:
+    """A green local gate predicts only its matching hosted job, not all of CI."""
+    copy = " ".join(_read(document).split())
+
+    assert "`poe gate` mirrors only the hosted `CI / gate` job." in copy
+    assert "The separate hosted `Secret scan / gitleaks` job" in copy
+    assert "If it passes locally, CI passes." not in copy
+
+
+def _registered_cli_commands() -> set[str]:
+    """Command names Typer exposes to a real ``edgeproc --help`` consumer."""
+    from edgeproc.cli import app  # noqa: PLC0415
+
+    return {
+        command.name or command.callback.__name__.replace("_", "-")
+        for command in app.registered_commands
+        if command.callback is not None
+    }
+
+
+def _documented_cli_commands() -> set[str]:
+    """Command names in ARCHITECTURE's machine-checkable CLI inventory."""
+    architecture = _read("docs/ARCHITECTURE.md")
+    inventory = architecture.split("Typer entrypoints:", maxsplit=1)[1].split("|", maxsplit=1)[0]
+    return set(re.findall(r"`([a-z-]+)`", inventory))
+
+
+def test_architecture_inventory_names_every_shipped_cli_command() -> None:
+    """Adding or documenting a command on only one side is release-contract drift."""
+    assert _documented_cli_commands() == _registered_cli_commands()
+
+
+@pytest.mark.parametrize("document", ["README.md", "docs/OPERATIONS.md", "docs/ARCHITECTURE.md"])
+def test_persistence_docs_name_the_stable_read_only_lock_free_path(document: str) -> None:
+    """Immutable consumers should not be told that every load takes the writer lock."""
+    assert "Stable read-only loads do not take that lock" in " ".join(_read(document).split())
+
+
+def test_current_changelog_names_the_stable_read_only_lock_free_path() -> None:
+    """The corrective release note records the shipped immutable-load behavior."""
+    section = _read("CHANGELOG.md").split("## [0.4.1]", maxsplit=1)[1]
+    current = " ".join(section.split("## [0.4.0]", maxsplit=1)[0].split())
+
+    assert "stable read-only loads do not take the snapshot lock" in current.lower()
+    assert "Load, save, migration, and snapshot cleanup share one bounded" not in current
+
+
+def test_release_runbook_says_the_tag_workflow_rechecks_eligibility() -> None:
+    """A tag on an arbitrary commit cannot inherit checks from another CI ref."""
+    release = _read("docs/OPERATIONS.md").split("## Release evidence", maxsplit=1)[1]
+
+    assert "It then runs all five checks itself" in release
+    assert "exact current `main` commit" in release
+    assert "green hosted `gate`, `Secret scan / gitleaks`, and `pip-audit`" in release
+    assert "full Git history" in release
+
+
+def test_release_runbook_keeps_build_code_outside_the_oidc_job() -> None:
+    """Trusted-publish credentials must not be exposed to a package build backend."""
+    release = " ".join(
+        _read("docs/OPERATIONS.md").split("## Release evidence", maxsplit=1)[1].split()
+    )
+
+    assert "Build and validation run in an unprivileged job" in release
+    assert "OIDC-bearing job only downloads and re-verifies" in release

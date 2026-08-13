@@ -9,6 +9,7 @@ can't do on its own).
 from __future__ import annotations
 
 import asyncio
+import errno
 import importlib
 import json
 import os
@@ -53,6 +54,18 @@ if TYPE_CHECKING:
 #: pattern-matching prose. Any other value (or unset) keeps the human rendering.
 _ERROR_FORMAT_ENV: Final = "EDGEPROC_ERROR_FORMAT"
 _JSON_FORMAT: Final = "json"
+_PATH_INPUT_ERRNOS: Final[frozenset[int]] = frozenset(
+    {
+        errno.EACCES,
+        errno.EISDIR,
+        errno.ELOOP,
+        errno.ENAMETOOLONG,
+        errno.ENOENT,
+        errno.ENOTDIR,
+        errno.EPERM,
+        errno.EROFS,
+    }
+)
 
 app = typer.Typer(help="EdgeProc — AI-native local execution substrate.", no_args_is_help=True)
 
@@ -311,24 +324,45 @@ def build_encoder(model: str | None, model_path: Path | None = None) -> Encoder:
 def _load_task(path: Path) -> Task:
     try:
         return Task.model_validate_json(path.read_text())
-    except (OSError, ValidationError) as exc:
+    except ValidationError as exc:
         _fail(f"could not load task from {path}: {exc}", CONFIG_INVALID, field="--task")
+    except OSError as exc:
+        _fail(
+            f"could not load task from {path}: {exc}",
+            _path_input_code(exc),
+            field="--task",
+        )
 
 
 def _route_runtime(
     index_dir: Path, model: str | None, index_name: str, model_path: Path | None = None
 ) -> Runtime:
-    try:
-        # Lazy: route belongs to the optional `[localvec]` extra, not the core deps.
-        from edgeproc.localvec.loader import load_local_runtime  # noqa: PLC0415
-    except ImportError:  # pragma: no cover - guards a partial install: route is unusable
-        # without the [localvec] extra, so we fail closed with an install hint, not a crash.
-        _fail("install edge-proc[localvec] to use route")
     encoder = _build_encoder_or_fail(model, model_path)
     try:
-        return load_local_runtime(index_dir, encoder=encoder, index_name=index_name)
-    except (FileNotFoundError, ValueError) as exc:
-        _fail(f"could not load index from {index_dir}: {exc}")
+        return _load_index_runtime(index_dir, index_name, encoder)
+    except ValueError as exc:
+        _fail_index_load(index_dir, exc, CONFIG_INVALID)
+    except OSError as exc:
+        _fail_index_load(index_dir, exc, _path_input_code(exc))
+
+
+def _load_index_runtime(index_dir: Path, index_name: str, encoder: Encoder) -> Runtime:
+    try:
+        from edgeproc.localvec.loader import load_local_runtime  # noqa: PLC0415
+    except ImportError:  # pragma: no cover - a partial install cannot route
+        _fail("install edge-proc[localvec] to use route")
+    return load_local_runtime(index_dir, encoder=encoder, index_name=index_name)
+
+
+def _fail_index_load(index_dir: Path, error: BaseException, code: ErrorCode) -> NoReturn:
+    _fail(f"could not load index from {index_dir}: {error}", code, field="--index-dir")
+
+
+def _path_input_code(error: OSError) -> ErrorCode:
+    """Classify caller-fixable path/permission errors without flattening device failures."""
+    if isinstance(error, PermissionError) or error.errno in _PATH_INPUT_ERRNOS:
+        return CONFIG_INVALID
+    return code_of(error)
 
 
 def _build_encoder_or_fail(model: str | None, model_path: Path | None) -> Encoder:
@@ -512,14 +546,34 @@ def _load_signer(key: Path, signer_cls: type[Ed25519Signer]) -> Signer:
 
 def _read_src(src: Path) -> dict[str, bytes]:
     """Read every file under ``src`` into ``{relative-posix-path: bytes}`` (fail closed)."""
-    if not src.is_dir():
-        _fail(f"src is not a directory: {src}")
+    paths = _safe_src_paths(src)
     files = {
-        p.relative_to(src).as_posix(): p.read_bytes() for p in sorted(src.rglob("*")) if p.is_file()
+        path.relative_to(src).as_posix(): path.read_bytes() for path in paths if path.is_file()
     }
     if not files:
         _fail(f"no files to publish under {src}")
     return files
+
+
+def _safe_src_paths(src: Path) -> list[Path]:
+    """Enumerate only real leaves below the selected source root."""
+    _require_source_root(src)
+    paths = sorted(src.rglob("*"))
+    _refuse_source_symlinks(src, paths)
+    return paths
+
+
+def _require_source_root(src: Path) -> None:
+    if src.is_symlink():
+        _fail(f"src must not be a symlink: {src}")
+    if not src.is_dir():
+        _fail(f"src is not a directory: {src}")
+
+
+def _refuse_source_symlinks(src: Path, paths: list[Path]) -> None:
+    symlink = next((path for path in paths if path.is_symlink()), None)
+    if symlink is not None:
+        _fail(f"src contains a symlink: {symlink.relative_to(src)}")
 
 
 def _render_pointer(pointer: VersionPointer, *, pretty: bool) -> str:

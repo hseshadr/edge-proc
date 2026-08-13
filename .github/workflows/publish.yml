@@ -16,8 +16,11 @@
 # releases through that identity. The workflow filename + repo + owner ARE the
 # credential — no `twine` password, no stored API token.
 #
-# The publish re-runs `uv run poe gate` on the tagged ref before building, so nothing
-# ships unless it passes the same gate CI enforces.
+# Tag creation does not trigger ci.yml. This workflow therefore re-runs the complete release
+# contract on the tagged ref itself: source identity, the full gate, the real example,
+# benchmark, a full-history secret scan, and the locked dependency audit. That unprivileged
+# job also builds, validates, hashes, and uploads the archives. The OIDC-bearing job only
+# downloads, re-verifies, and publishes them; registry verification runs unprivileged afterward.
 #
 # NOTE: every `uses:` below is pinned to a full commit SHA, not a moving tag — a tag can
 # be repointed at new code, a SHA cannot. The trailing comment records which release that
@@ -31,15 +34,95 @@ on:
 permissions:
   contents: read
 jobs:
-  publish:
+  release-eligibility:
     runs-on: ubuntu-latest
     permissions:
-      id-token: write # OIDC — PyPI verifies this against the registered trusted publisher.
+      actions: read
+      checks: read
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+
+      - name: Verify source release identity
+        run: |
+          python3 - <<'PY'
+          import ast
+          import os
+          import re
+          from pathlib import Path
+
+          version_tree = ast.parse(Path("edgeproc/_version.py").read_text(encoding="utf-8"))
+          versions = [
+              ast.literal_eval(node.value)
+              for node in version_tree.body
+              if isinstance(node, ast.Assign)
+              and any(isinstance(target, ast.Name) and target.id == "__version__" for target in node.targets)
+          ]
+          if len(versions) != 1 or not isinstance(versions[0], str):
+              raise SystemExit("release version error: edgeproc/_version.py must assign one string __version__")
+
+          version = versions[0]
+          tag = os.environ.get("GITHUB_REF_NAME", "")
+          if tag != f"v{version}":
+              raise SystemExit(f"release tag mismatch: GITHUB_REF_NAME={tag!r}, expected 'v{version}'")
+
+          changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          headings = re.findall(r"^## \[([^]]+)]", changelog, flags=re.MULTILINE)
+          stable = next((heading for heading in headings if heading.lower() != "unreleased"), None)
+          if stable != version:
+              raise SystemExit(f"release changelog mismatch: top stable release is {stable!r}, expected {version!r}")
+
+          print(f"Release identity verified: edge-proc {version} from {tag}")
+          PY
+
+      - name: Verify exact main and hosted checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          tagged_sha="$(git rev-parse 'HEAD^{commit}')"
+          main_sha="$(git rev-parse 'refs/remotes/origin/main^{commit}')"
+          if [ "${tagged_sha}" != "${main_sha}" ]; then
+            echo "::error::Release tag must identify the exact current main commit (${main_sha}), not ${tagged_sha}."
+            exit 1
+          fi
+
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/commits/${tagged_sha}/check-runs?per_page=100" \
+            > /tmp/release-check-runs.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          required = {"gate", "Secret scan / gitleaks", "pip-audit"}
+          payload = json.loads(Path("/tmp/release-check-runs.json").read_text(encoding="utf-8"))
+          successful = {
+              run.get("name")
+              for run in payload.get("check_runs", [])
+              if run.get("conclusion") == "success"
+          }
+          missing = sorted(required - successful)
+          if missing:
+              raise SystemExit(f"release eligibility error: exact commit lacks green hosted checks: {missing}")
+          print(f"Exact main hosted checks verified: {sorted(required)}")
+          PY
+
+      # The action installs the portfolio-pinned gitleaks binary. A tag push commonly has
+      # zero entries in event.commits, so its event-driven scan can be vacuous; the next
+      # step supplies an explicit full-history scan and is the release eligibility check.
+      - name: Install gitleaks
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_SUMMARY: "false"
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+          GITLEAKS_VERSION: "8.24.3"
+
+      - name: Scan release history and tree for secrets
+        run: gitleaks detect --redact --no-banner --source . --log-opts="--all"
 
       - name: Setup Python + uv (+ sync)
         uses: hseshadr/ci/.github/actions/setup-python-uv@605e51cbc86f452b56edcf1c9660921da797cbfe # ci-v3.2.1
@@ -49,16 +132,193 @@ jobs:
       - name: Gate (uv run poe gate)
         run: uv run poe gate
 
+      - name: Run the real end-to-end example
+        run: bash examples/run_loop.sh
+
+      - name: Run the release benchmark
+        run: uv run python benchmarks/benchmark.py
+
+      - name: Export locked dependencies
+        run: uv export --frozen --all-extras --no-emit-project --no-hashes -o requirements-audit.txt
+
+      - name: Audit locked dependencies
+        run: uvx pip-audit -r requirements-audit.txt --disable-pip --no-deps
+
+      # Build backends execute project-controlled Python. Keep them in this unprivileged
+      # job so neither hatchling nor any installed dependency can request a PyPI OIDC token.
       - name: Build sdist + wheel
         run: uv build --out-dir dist
+
+      - name: Verify built distribution metadata
+        run: |
+          python - <<'PY'
+          import ast
+          import os
+          import re
+          import tarfile
+          import zipfile
+          from email.parser import BytesParser
+          from pathlib import Path
+
+          def source_version() -> str:
+              tree = ast.parse(Path("edgeproc/_version.py").read_text(encoding="utf-8"))
+              values = [
+                  ast.literal_eval(node.value)
+                  for node in tree.body
+                  if isinstance(node, ast.Assign)
+                  and any(isinstance(target, ast.Name) and target.id == "__version__" for target in node.targets)
+              ]
+              if len(values) != 1 or not isinstance(values[0], str):
+                  raise SystemExit("built metadata error: invalid source __version__")
+              return values[0]
+
+          def only(items: list[Path], kind: str) -> Path:
+              if len(items) != 1:
+                  raise SystemExit(f"built metadata error: expected one {kind}, found {len(items)}")
+              return items[0]
+
+          def wheel_metadata(path: Path) -> bytes:
+              with zipfile.ZipFile(path) as archive:
+                  members = [name for name in archive.namelist() if name.endswith(".dist-info/METADATA")]
+                  if len(members) != 1:
+                      raise SystemExit(f"built metadata error: {path.name} has {len(members)} METADATA files")
+                  return archive.read(members[0])
+
+          def sdist_metadata(path: Path) -> bytes:
+              with tarfile.open(path, "r:gz") as archive:
+                  members = [member for member in archive.getmembers() if member.name.endswith("/PKG-INFO")]
+                  if len(members) != 1:
+                      raise SystemExit(f"built metadata error: {path.name} has {len(members)} PKG-INFO files")
+                  extracted = archive.extractfile(members[0])
+                  if extracted is None:
+                      raise SystemExit(f"built metadata error: cannot read {members[0].name}")
+                  return extracted.read()
+
+          version = source_version()
+          tag = os.environ.get("GITHUB_REF_NAME", "")
+          if tag != f"v{version}":
+              raise SystemExit(f"built metadata tag mismatch: {tag!r} != 'v{version}'")
+
+          wheel = only(sorted(Path("dist").glob("*.whl")), "wheel")
+          sdist = only(sorted(Path("dist").glob("*.tar.gz")), "sdist")
+          for archive, payload in ((wheel, wheel_metadata(wheel)), (sdist, sdist_metadata(sdist))):
+              metadata = BytesParser().parsebytes(payload)
+              project = re.sub(r"[-_.]+", "-", metadata.get("Name", "")).lower()
+              if project != "edge-proc":
+                  raise SystemExit(f"built project metadata mismatch in {archive.name}: {project!r}")
+              if metadata.get("Version") != version:
+                  raise SystemExit(
+                      f"built version metadata mismatch in {archive.name}: "
+                      f"{metadata.get('Version')!r} != {version!r}"
+                  )
+
+          print(f"Built metadata verified: edge-proc {version} in wheel and sdist")
+          PY
+
+      - name: Record release artifact digests
+        run: sha256sum dist/* > SHA256SUMS
+
+      - name: Upload verified release artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: edge-proc-${{ github.sha }}
+          path: |
+            dist/
+            SHA256SUMS
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: [release-eligibility]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      id-token: write # OIDC — PyPI verifies this against the registered trusted publisher.
+      contents: read
+    steps:
+      - name: Download verified release artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: edge-proc-${{ github.sha }}
+          path: release
+
+      # This uses only the runner's standard library and coreutils. It does not install or
+      # execute the downloaded package, its build backend, or any project dependency.
+      - name: Verify downloaded release artifact
+        run: |
+          set -euo pipefail
+          (cd release && sha256sum --check SHA256SUMS)
+          python3 - <<'PY'
+          import os
+          import re
+          import tarfile
+          import zipfile
+          from email.parser import BytesParser
+          from pathlib import Path
+
+          def only(items: list[Path], kind: str) -> Path:
+              if len(items) != 1:
+                  raise SystemExit(f"downloaded artifact error: expected one {kind}, found {len(items)}")
+              return items[0]
+
+          def wheel_metadata(path: Path) -> bytes:
+              with zipfile.ZipFile(path) as archive:
+                  members = [name for name in archive.namelist() if name.endswith(".dist-info/METADATA")]
+                  if len(members) != 1:
+                      raise SystemExit(f"downloaded artifact error: {path.name} has {len(members)} METADATA files")
+                  return archive.read(members[0])
+
+          def sdist_metadata(path: Path) -> bytes:
+              with tarfile.open(path, "r:gz") as archive:
+                  members = [member for member in archive.getmembers() if member.name.endswith("/PKG-INFO")]
+                  if len(members) != 1:
+                      raise SystemExit(f"downloaded artifact error: {path.name} has {len(members)} PKG-INFO files")
+                  extracted = archive.extractfile(members[0])
+                  if extracted is None:
+                      raise SystemExit(f"downloaded artifact error: cannot read {members[0].name}")
+                  return extracted.read()
+
+          tag = os.environ.get("GITHUB_REF_NAME", "")
+          if re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag) is None:
+              raise SystemExit(f"downloaded artifact tag error: invalid release tag {tag!r}")
+          version = tag.removeprefix("v")
+
+          wheel = only(sorted(Path("release/dist").glob("*.whl")), "wheel")
+          sdist = only(sorted(Path("release/dist").glob("*.tar.gz")), "sdist")
+          for archive, payload in ((wheel, wheel_metadata(wheel)), (sdist, sdist_metadata(sdist))):
+              metadata = BytesParser().parsebytes(payload)
+              project = re.sub(r"[-_.]+", "-", metadata.get("Name", "")).lower()
+              if project != "edge-proc":
+                  raise SystemExit(f"downloaded project metadata mismatch in {archive.name}: {project!r}")
+              if metadata.get("Version") != version:
+                  raise SystemExit(
+                      f"downloaded version metadata mismatch in {archive.name}: "
+                      f"{metadata.get('Version')!r} != {version!r}"
+                  )
+
+          print(f"Downloaded artifact verified: edge-proc {version} in wheel and sdist")
+          PY
 
       # No `password:` input -> the action publishes via OIDC Trusted Publishing.
       - name: Publish to PyPI (OIDC Trusted Publishing)
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
-          packages-dir: dist
+          packages-dir: release/dist
           attestations: true
           print-hash: true
+
+  verify-published:
+    needs: [publish]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Download verified release artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: edge-proc-${{ github.sha }}
+          path: release
 
       # "The upload step exited 0" and "the package exists" are DIFFERENT FACTS — six
       # green publish runs once stacked up on a sibling package that 404'd on PyPI the
@@ -67,7 +327,7 @@ jobs:
       - name: Verify the release is actually on PyPI
         run: |
           shopt -s nullglob
-          sdists=(dist/*.tar.gz)
+          sdists=(release/dist/*.tar.gz)
           if ((${#sdists[@]} == 0)); then
             echo "::error::No sdist in dist — cannot determine what was published."
             exit 1

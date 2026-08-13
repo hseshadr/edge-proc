@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import hashlib
 import os
+import stat
 from pathlib import Path
 
 import pytest
 import zstandard
 
+from edgeproc.bundles import cas
 from edgeproc.bundles.cas import (
     CacheStore,
     FilesystemCacheStore,
@@ -86,6 +88,72 @@ def test_chunk_round_trip_and_zstd_layout(tmp_path: Path) -> None:
     assert on_disk.stat().st_size < len(_COMPRESSIBLE)
 
 
+def test_atomic_write_fsyncs_parent_directory_after_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a recorder that distinguishes file fsyncs from directory fsyncs
+    directory_fsyncs = 0
+    real_fsync = os.fsync
+
+    def record_fsync(fd: int) -> None:
+        nonlocal directory_fsyncs
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            directory_fsyncs += 1
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", record_fsync)
+
+    # When a CAS object becomes visible through an atomic replace
+    _store(tmp_path).put_chunk(b"durable content address")
+
+    # Then its parent directory entry is also made durable
+    assert directory_fsyncs >= 1
+
+
+def test_first_chunk_durably_links_every_new_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "new-parent" / "cache"
+    fsynced: list[Path] = []
+    real_fsync = cas._fsync_directory
+
+    def record(path: Path) -> None:
+        fsynced.append(path)
+        real_fsync(path)
+
+    monkeypatch.setattr(cas, "_fsync_directory", record)
+    store = FilesystemCacheStore(root)
+    digest = store.put_chunk(b"first")
+
+    assert tmp_path in fsynced
+    assert root.parent in fsynced
+    assert root in fsynced
+    assert root / "chunks" in fsynced
+    assert root / "chunks" / digest[:2] in fsynced
+
+
+def test_atomic_write_can_retry_after_replace_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a first attempt that reaches the durable temp file but fails its rename
+    store = _store(tmp_path)
+    real_replace = os.replace
+
+    def fail_replace(_src: object, _dst: object) -> None:
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(os, "replace", fail_replace)
+    with pytest.raises(OSError, match="replace failure"):
+        store.put_chunk(b"retryable payload")
+
+    # When the filesystem is healthy and the same operation retries
+    monkeypatch.setattr(os, "replace", real_replace)
+    digest = store.put_chunk(b"retryable payload")
+
+    # Then no abandoned same-PID temp file wedges the content address
+    assert store.get_chunk(digest) == b"retryable payload"
+
+
 def test_put_chunk_idempotent_and_has_chunk(tmp_path: Path) -> None:
     store = _store(tmp_path)
     data = b"some chunk bytes"
@@ -96,6 +164,38 @@ def test_put_chunk_idempotent_and_has_chunk(tmp_path: Path) -> None:
     assert store.has_chunk(digest) is True
     # Re-put identical data: same hash, no error, no rewrite.
     assert store.put_chunk(data) == first
+
+
+def test_cas_refuses_same_root_symlinked_object_leaves(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    manifest = b'{"safe":true}'
+    digest = hashlib.sha256(manifest).hexdigest()
+    victim = tmp_path / "victim"
+    victim.write_bytes(b"unchanged")
+    (tmp_path / "manifests" / digest).symlink_to(victim)
+
+    with pytest.raises(IntegrityError, match="symlink"):
+        store.put_manifest(manifest)
+    assert victim.read_bytes() == b"unchanged"
+
+
+def test_cas_refuses_symlinked_chunk_and_active_leaves(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    data = b"same-root leaf"
+    digest = store.put_chunk(data)
+    chunk = tmp_path / "chunks" / digest[:2] / digest
+    victim = tmp_path / "victim"
+    victim.write_bytes(chunk.read_bytes())
+    chunk.unlink()
+    chunk.symlink_to(victim)
+    with pytest.raises(IntegrityError, match="symlink"):
+        store.get_chunk(digest)
+
+    active_victim = tmp_path / "active-victim"
+    active_victim.write_text("{}")
+    (tmp_path / "active").symlink_to(active_victim)
+    with pytest.raises(IntegrityError, match="symlink"):
+        store.read_active()
 
 
 def test_get_chunk_fail_closed_on_corruption(tmp_path: Path) -> None:
@@ -198,7 +298,7 @@ def test_store_rejects_symlinked_cas_directory(tmp_path: Path, directory: str) -
     (root / directory).symlink_to(outside, target_is_directory=True)
 
     # When / Then
-    with pytest.raises(IntegrityError, match="escapes"):
+    with pytest.raises(IntegrityError, match=r"symlink|escapes"):
         FilesystemCacheStore(root)
 
 
@@ -401,6 +501,58 @@ def test_gc_removes_orphans_keeps_active_and_shared(tmp_path: Path) -> None:
     for payload in (shared, only_a):
         assert store.get_chunk(_chunk_hash(payload)) == payload
     assert not store.has_chunk(_chunk_hash(only_b))
+
+
+def test_gc_refuses_symlinked_chunk_shard_without_deleting_external_file(tmp_path: Path) -> None:
+    store = _store(tmp_path / "cache")
+    _promote_manifest(store, _manifest_for(store, b"active payload"))
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    victim = outside / ("f" * 64)
+    victim.write_bytes(b"must survive")
+    (store.root / "chunks" / "ff").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(IntegrityError, match="symlink"):
+        store.gc()
+
+    assert victim.read_bytes() == b"must survive"
+
+
+def test_gc_refuses_symlinked_chunk_leaf_without_touching_target(tmp_path: Path) -> None:
+    store = _store(tmp_path / "cache")
+    _promote_manifest(store, _manifest_for(store, b"active payload"))
+    victim = tmp_path / "outside-chunk"
+    victim.write_bytes(b"must survive")
+    shard = store.root / "chunks" / "ff"
+    shard.mkdir()
+    (shard / ("f" * 64)).symlink_to(victim)
+
+    with pytest.raises(IntegrityError, match="symlink"):
+        store.gc()
+
+    assert victim.read_bytes() == b"must survive"
+
+
+def test_gc_refuses_a_non_directory_chunk_shard(tmp_path: Path) -> None:
+    store = _store(tmp_path / "cache")
+    _promote_manifest(store, _manifest_for(store, b"active payload"))
+    (store.root / "chunks" / "ff").write_bytes(b"not a shard")
+
+    with pytest.raises(IntegrityError, match="real directory"):
+        store.gc()
+
+
+def test_gc_refuses_symlinked_manifest_leaf_without_touching_target(tmp_path: Path) -> None:
+    store = _store(tmp_path / "cache")
+    _promote_manifest(store, _manifest_for(store, b"active payload"))
+    victim = tmp_path / "outside-manifest"
+    victim.write_bytes(b"must survive")
+    (store.root / "manifests" / ("f" * 64)).symlink_to(victim)
+
+    with pytest.raises(IntegrityError, match="symlink"):
+        store.gc()
+
+    assert victim.read_bytes() == b"must survive"
 
 
 def test_gc_fail_closed_on_non_canonical_active_manifest(tmp_path: Path) -> None:

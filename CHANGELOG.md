@@ -4,7 +4,56 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-08-13
+
+This corrective release supersedes 0.4.0 for applications that persist a
+`FaissVectorIndex`. Upgrade before the next index save/load cycle.
+
+### Fixed
+- **A local vector snapshot can no longer combine files from different saves.** The FAISS
+  binary and its metadata sidecar now live under a unique generation. Both are flushed before
+  one atomic manifest commit makes that generation readable. Save, writable load, migration,
+  and snapshot cleanup share one bounded cross-process lock; an interrupted save is ignored,
+  the previous complete generation remains recoverable, and retention is bounded to those
+  two generations. Loaded writers compare-and-swap their generation so a stale process
+  cannot erase a newer commit; file verification streams with bounded memory;
+  snapshot-directory symlinks are refused. Cleanup after an active commit is best-effort and
+  observable, so a cleanup failure cannot falsely report that the committed save failed.
+  Valid writable 0.4.0 index directories migrate on first load.
+- CAS atomic writes now flush every newly created parent and shard plus the directory after
+  `os.replace`, so new directory entries—not only file contents—survive a power-loss boundary
+  on durable filesystems.
+- Published-origin chunk links are flushed before the durable `latest` pointer; copy fallback
+  also flushes each destination file so `latest` cannot outlive the objects it references.
+  Symlinked flat-origin chunk or manifest directories are refused before publication.
+- Snapshot, CAS, pointer, and flat-origin object leaves now refuse symlinks even when the
+  target stays inside the selected root; no trusted pointer advances over an aliased object.
+  CAS garbage collection refuses symlinked chunk shards and object leaves before sweeping,
+  so cleanup cannot unlink a file outside its cache. The publisher refuses symlinks under
+  `--src`, so a source-tree alias cannot pull an external file into a signed release.
+- Read-only saved indexes load without writing their snapshot directory. Writable loads
+  retain the cross-process snapshot lock; stable read-only loads do not take the snapshot
+  lock. They pin open descriptors for one stable manifest enumeration, verify both files
+  through those handles, and retry up to three times if concurrent cleanup changes the
+  manifest set before failing closed. Immutable legacy pairs load directly without migration
+  or deletion. CLI permission failures now render a coded refusal.
+- Publishing verifies and repairs reused chunk objects before advancing `latest`. A corrupt
+  producer-side CAS object or flat-origin hardlink is atomically replaced from the current
+  source bytes, so a successful re-publish remains syncable by a fresh device.
+- Trusted publishing now builds, tests, audits, and validates archives without OIDC permission.
+  The credentialed job only downloads the short-lived artifact, rechecks its SHA-256 digests
+  and metadata without executing package code, and invokes the official PyPI publisher;
+  registry propagation verification runs afterward without OIDC.
+- The source distribution now includes the benchmarks, operational docs, workflow fixtures,
+  mutation harness, environment example, citation, roadmap, contributor guide, and lockfile
+  required by its shipped test suite. Its contract tests run from the extracted archive.
+- The supported `edgeproc-core` floor is now 0.4.2; superseded core releases are excluded
+  from built package metadata.
+
 ## [0.4.0] — 2026-08-12
+
+> **Superseded by 0.4.1** for persisted `FaissVectorIndex` state. The offline model contract
+> below remains current, but applications that save local vector indexes should upgrade.
 
 This release makes the documented cold-device offline contract installable. It is a
 breaking release because implicit model downloads now refuse by default.
