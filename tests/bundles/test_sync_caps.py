@@ -46,7 +46,7 @@ def test_sync_rejects_over_file_count_cap(tmp_path: Path) -> None:
             store=FilesystemCacheStore(tmp_path / "cache"),
             adapter=FilesystemAdapter(),
             verifier=verifier,
-            max_files=1,  # manifest has 3 files > cap
+            max_files=2,  # boundary: manifest has exactly one file over the cap
         )
 
 
@@ -63,7 +63,7 @@ def test_sync_running_byte_cap_trips_mid_fetch(tmp_path: Path) -> None:
 
 
 def test_sync_over_cap_writes_nothing_over_the_ceiling(tmp_path: Path) -> None:
-    # Fail-closed: an over-cap sync must NOT promote an active pointer.
+    # Fail-closed: the chunk that crosses the cap is refused BEFORE it reaches the store.
     base_url, verifier = _origin(tmp_path)
     store = FilesystemCacheStore(tmp_path / "cache")
     with pytest.raises(SyncCapError):
@@ -72,8 +72,9 @@ def test_sync_over_cap_writes_nothing_over_the_ceiling(tmp_path: Path) -> None:
             store=store,
             adapter=FilesystemAdapter(),
             verifier=verifier,
-            max_total_bytes=100,
+            max_total_bytes=1,
         )
+    assert list((tmp_path / "cache" / "chunks").glob("*/*")) == []
     assert store.read_active() is None
 
 
