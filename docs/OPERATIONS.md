@@ -76,12 +76,19 @@ responsibility.
   makes the monotonic check/write indivisible. The default wait is 30 seconds; timeout is a
   typed `IntegrityError` and the caller should retry with jitter.
 - **Local vector state:** `FaissVectorIndex` serializes insert, rebuild, delete, search,
-  and statistics per instance. Persistence is also cross-process: save, load, legacy
-  migration, and snapshot GC share one bounded file lock. A save writes generation-addressed
-  FAISS and state files, flushes them, then makes them visible with one atomic manifest commit
-  and durable parent-directory links. Digests stream in fixed-size blocks, so verification
-  does not copy a multi-gigabyte FAISS file into Python memory. Load accepts only a
-  digest-matched complete generation. An instance loaded from disk also compare-and-swaps its
+  and statistics per instance. Persistence is also cross-process: save, writable load,
+  legacy migration, and snapshot GC share one bounded file lock. A save writes
+  generation-addressed FAISS and state files, flushes them, then publishes
+  one atomic manifest commit and durable parent-directory links. Digests stream in fixed-size
+  blocks, so verification does not copy a multi-gigabyte FAISS file into Python memory. Stable
+  read-only loads do not take that lock: they enumerate a stable manifest set, pin open
+  descriptors for the selected generation, verify both digests from those handles, and retry
+  if a concurrent writer or GC changes the set. If the directory is an immutable legacy 0.4.0
+  pair, a structurally valid pair loads directly without creating `snapshots/`, migrating,
+  deleting, or otherwise writing. Every generation load accepts only a digest-matched complete
+  commit. The read-only path makes three attempts to observe a stable manifest set, then fails
+  closed with an operational `ValueError` if churn continues; it never returns a hybrid
+  generation. An instance loaded from a generation also compare-and-swaps its
   selected generation during save: if another process committed first, save raises
   `SnapshotConflictError`; reload, reapply the intended mutation, and retry. It
   recovers the previous complete generation when the newest commit is corrupt, retains only
@@ -163,12 +170,17 @@ every consumer, and the budgets above — not these figures — are what the gat
 
 ## Release evidence
 
-A release is eligible only when `uv run poe gate`, `sh examples/run_loop.sh`,
-`uv run python benchmarks/benchmark.py`, the secret scan, dependency audit,
-and CI all pass on the exact commit. Record the immutable commit/tag and benchmark JSON;
-do not infer production truth from a different local tree.
+A release is eligible only when `uv run poe gate`, `bash examples/run_loop.sh`,
+`uv run python benchmarks/benchmark.py`, the secret scan, and dependency audit all pass on the
+exact commit. The tag-triggered `publish.yml` workflow first requires the tag to identify the
+exact current `main` commit with green hosted `gate`, `Secret scan / gitleaks`, and `pip-audit`
+checks. It then runs all five checks itself because tag creation does not trigger `ci.yml`.
+Before building, it verifies the exact tag/version/top-changelog identity; before OIDC upload,
+it verifies both built artifacts' project and version metadata. Record the immutable commit/tag
+and benchmark JSON; do not infer production truth from a different local tree.
 
-The secret scan is the shared `hseshadr/ci` brick, called from `ci.yml`. It scans the
-commit range of each push or PR, not the whole repository — see the "no key material in
-the tree" invariant in `CLAUDE.md`. To sweep the entire history before a release, run
-`gitleaks detect` locally against a full clone.
+The local `poe gate` mirrors only the hosted `CI / gate` job. The separate hosted
+`Secret scan / gitleaks` job is the shared `hseshadr/ci` brick called from `ci.yml`; it scans
+the commit range of each push or PR, not the whole repository. The tag workflow independently
+scans the full Git history from the tagged checkout before the OIDC-bearing job becomes
+reachable. See the "no key material in the tree" invariant in `CLAUDE.md`.

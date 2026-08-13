@@ -9,6 +9,7 @@ can't do on its own).
 from __future__ import annotations
 
 import asyncio
+import errno
 import importlib
 import json
 import os
@@ -53,6 +54,18 @@ if TYPE_CHECKING:
 #: pattern-matching prose. Any other value (or unset) keeps the human rendering.
 _ERROR_FORMAT_ENV: Final = "EDGEPROC_ERROR_FORMAT"
 _JSON_FORMAT: Final = "json"
+_PATH_INPUT_ERRNOS: Final[frozenset[int]] = frozenset(
+    {
+        errno.EACCES,
+        errno.EISDIR,
+        errno.ELOOP,
+        errno.ENAMETOOLONG,
+        errno.ENOENT,
+        errno.ENOTDIR,
+        errno.EPERM,
+        errno.EROFS,
+    }
+)
 
 app = typer.Typer(help="EdgeProc — AI-native local execution substrate.", no_args_is_help=True)
 
@@ -311,28 +324,45 @@ def build_encoder(model: str | None, model_path: Path | None = None) -> Encoder:
 def _load_task(path: Path) -> Task:
     try:
         return Task.model_validate_json(path.read_text())
-    except (OSError, ValidationError) as exc:
+    except ValidationError as exc:
         _fail(f"could not load task from {path}: {exc}", CONFIG_INVALID, field="--task")
+    except OSError as exc:
+        _fail(
+            f"could not load task from {path}: {exc}",
+            _path_input_code(exc),
+            field="--task",
+        )
 
 
 def _route_runtime(
     index_dir: Path, model: str | None, index_name: str, model_path: Path | None = None
 ) -> Runtime:
-    try:
-        # Lazy: route belongs to the optional `[localvec]` extra, not the core deps.
-        from edgeproc.localvec.loader import load_local_runtime  # noqa: PLC0415
-    except ImportError:  # pragma: no cover - guards a partial install: route is unusable
-        # without the [localvec] extra, so we fail closed with an install hint, not a crash.
-        _fail("install edge-proc[localvec] to use route")
     encoder = _build_encoder_or_fail(model, model_path)
     try:
-        return load_local_runtime(index_dir, encoder=encoder, index_name=index_name)
-    except (OSError, ValueError) as exc:
-        _fail(
-            f"could not load index from {index_dir}: {exc}",
-            CONFIG_INVALID,
-            field="--index-dir",
-        )
+        return _load_index_runtime(index_dir, index_name, encoder)
+    except ValueError as exc:
+        _fail_index_load(index_dir, exc, CONFIG_INVALID)
+    except OSError as exc:
+        _fail_index_load(index_dir, exc, _path_input_code(exc))
+
+
+def _load_index_runtime(index_dir: Path, index_name: str, encoder: Encoder) -> Runtime:
+    try:
+        from edgeproc.localvec.loader import load_local_runtime  # noqa: PLC0415
+    except ImportError:  # pragma: no cover - a partial install cannot route
+        _fail("install edge-proc[localvec] to use route")
+    return load_local_runtime(index_dir, encoder=encoder, index_name=index_name)
+
+
+def _fail_index_load(index_dir: Path, error: BaseException, code: ErrorCode) -> NoReturn:
+    _fail(f"could not load index from {index_dir}: {error}", code, field="--index-dir")
+
+
+def _path_input_code(error: OSError) -> ErrorCode:
+    """Classify caller-fixable path/permission errors without flattening device failures."""
+    if isinstance(error, PermissionError) or error.errno in _PATH_INPUT_ERRNOS:
+        return CONFIG_INVALID
+    return code_of(error)
 
 
 def _build_encoder_or_fail(model: str | None, model_path: Path | None) -> Encoder:

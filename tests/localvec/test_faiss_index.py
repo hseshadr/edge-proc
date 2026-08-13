@@ -12,9 +12,10 @@ import multiprocessing
 import os
 import shutil
 import tracemalloc
+from dataclasses import dataclass
 from multiprocessing.connection import Connection
 from pathlib import Path
-from threading import Event, Thread
+from threading import Event, Thread, current_thread
 
 import pytest
 from edgeproc_core.vector_mgmt.conformance import assert_vector_index_conformance
@@ -26,7 +27,7 @@ from edgeproc_core.vector_mgmt.core.types import (
 from filelock import FileLock, Timeout
 
 from edgeproc import errors
-from edgeproc.localvec import snapshot_store
+from edgeproc.localvec import faiss_index, snapshot_store
 from edgeproc.localvec.faiss_index import (
     FaissVectorIndex,
     SnapshotConflictError,
@@ -86,6 +87,103 @@ def _commit_loaded_writer(
         ready.send("conflict")
     else:
         ready.send("saved")
+
+
+async def _save_named_index(directory: Path, entity_id: str) -> None:
+    idx = _index()
+    await idx.insert([_emb(entity_id, [1.0, 0.0, 0.0, 0.0])])
+    idx.save(directory)
+
+
+async def _save_generations(directory: Path, start: int, stop: int) -> None:
+    for number in range(start, stop):
+        await _save_named_index(directory, f"item-{number}")
+
+
+async def _write_legacy_pair(root: Path) -> Path:
+    source = root / "source"
+    legacy = root / "legacy"
+    legacy.mkdir()
+    await _save_named_index(source, "red")
+    index_path, state_path = _committed_files(source)
+    shutil.copyfile(index_path, legacy / "index.faiss")
+    shutil.copyfile(state_path, legacy / "state.json")
+    return legacy
+
+
+def _load_read_only_tree(directory: Path) -> FaissVectorIndex:
+    paths = [directory, *directory.rglob("*")]
+    try:
+        for path in paths:
+            path.chmod(0o555 if path.is_dir() else 0o444)
+        return FaissVectorIndex.load("products", directory)
+    finally:
+        for path in paths:
+            path.chmod(0o755 if path.is_dir() else 0o644)
+
+
+@dataclass(frozen=True)
+class _LoadRace:
+    thread: Thread
+    release: Event
+    loaded: list[FaissVectorIndex]
+    failures: list[BaseException]
+
+
+def _install_paused_reader(monkeypatch: pytest.MonkeyPatch) -> tuple[Event, Event]:
+    entered, release = Event(), Event()
+    original_payload = SnapshotStore._payload
+
+    def pause(store: SnapshotStore, manifest: Path) -> object:
+        if current_thread().name == "lockless-reader" and not entered.is_set():
+            entered.set()
+            assert release.wait(timeout=5)
+        return original_payload(store, manifest)
+
+    monkeypatch.setattr(SnapshotStore, "_payload", pause)
+    return entered, release
+
+
+def _install_paused_legacy_read(monkeypatch: pytest.MonkeyPatch) -> tuple[Event, Event]:
+    entered, release = Event(), Event()
+    original_read = faiss_index._read_legacy
+
+    def pause(directory: Path) -> object:
+        if current_thread().name == "lockless-reader":
+            entered.set()
+            assert release.wait(timeout=5)
+        return original_read(directory)
+
+    monkeypatch.setattr(faiss_index, "_read_legacy", pause)
+    return entered, release
+
+
+def _capture_load(
+    directory: Path, loaded: list[FaissVectorIndex], failures: list[BaseException]
+) -> None:
+    try:
+        loaded.append(FaissVectorIndex.load("products", directory))
+    except BaseException as exc:  # test thread must surface every failure
+        failures.append(exc)
+
+
+def _start_lockless_load(directory: Path, release: Event) -> _LoadRace:
+    loaded: list[FaissVectorIndex] = []
+    failures: list[BaseException] = []
+    thread = Thread(
+        target=_capture_load, args=(directory, loaded, failures), name="lockless-reader"
+    )
+    thread.start()
+    return _LoadRace(thread, release, loaded, failures)
+
+
+async def _assert_race_loaded(race: _LoadRace, entity_id: str) -> None:
+    race.release.set()
+    race.thread.join(timeout=5)
+    assert not race.thread.is_alive()
+    assert race.failures == []
+    result = await race.loaded[0].search([1.0, 0.0, 0.0, 0.0], k=1)
+    assert [doc for doc, _ in result] == [entity_id]
 
 
 def test_satisfies_the_shared_libs_protocol() -> None:
@@ -397,6 +495,44 @@ async def test_load_migrates_a_complete_legacy_pair_to_one_snapshot_commit(
     assert not (legacy / "state.json").exists()
 
 
+async def test_should_load_legacy_pair_without_migration_when_directory_is_read_only(
+    tmp_path: Path,
+) -> None:
+    # Given a valid 0.4.0 pair on an immutable mount
+    legacy = await _write_legacy_pair(tmp_path)
+    # When it is loaded without permission to acquire a lock or migrate
+    loaded = _load_read_only_tree(legacy)
+    # Then the legacy pair stays intact and readable without a write attempt
+    assert await loaded.search([1.0, 0.0, 0.0, 0.0], k=1) == [("red", pytest.approx(0.0, abs=1e-6))]
+    assert not (legacy / "snapshots").exists()
+    assert (legacy / "index.faiss").is_file()
+    assert (legacy / "state.json").is_file()
+
+
+async def test_should_retry_read_only_legacy_load_when_writer_migrates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    legacy = await _write_legacy_pair(tmp_path)
+    entered, release = _install_paused_legacy_read(monkeypatch)
+    monkeypatch.setattr(faiss_index, "_acquire_load_lock", lambda _lock: False)
+    race = _start_lockless_load(legacy, release)
+    assert entered.wait(timeout=5)
+    faiss_index._migrate_legacy(legacy, SnapshotStore(legacy))
+    await _assert_race_loaded(race, "red")
+
+
+async def test_should_refuse_a_symlinked_read_only_legacy_leaf(tmp_path: Path) -> None:
+    # Given
+    legacy = await _write_legacy_pair(tmp_path)
+    external = tmp_path / "external.faiss"
+    shutil.copyfile(legacy / "index.faiss", external)
+    (legacy / "index.faiss").unlink()
+    (legacy / "index.faiss").symlink_to(external)
+    # When / Then
+    with pytest.raises(ValueError, match="regular file"):
+        _load_read_only_tree(legacy)
+
+
 async def test_load_recovers_previous_generation_when_newest_manifest_is_corrupt(
     tmp_path: Path,
 ) -> None:
@@ -516,6 +652,19 @@ async def test_save_bounds_snapshot_retention_to_current_and_recovery_generation
     assert len([path for path in data_files if path.name.endswith(".state.json")]) == 2
     loaded = FaissVectorIndex.load("products", directory)
     assert [doc for doc, _ in await loaded.search([1.0, 0.0, 0.0, 0.0], k=1)] == ["item-4"]
+
+
+async def test_should_retry_lockless_load_when_writer_gc_replaces_enumerated_generations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / "vec"
+    await _save_generations(directory, 0, 2)
+    entered, release = _install_paused_reader(monkeypatch)
+    monkeypatch.setattr(faiss_index, "_acquire_load_lock", lambda _lock: False)
+    race = _start_lockless_load(directory, release)
+    assert entered.wait(timeout=5)
+    await _save_generations(directory, 2, 4)
+    await _assert_race_loaded(race, "item-3")
 
 
 async def test_save_waits_for_the_real_cross_process_snapshot_lock(tmp_path: Path) -> None:
@@ -1057,22 +1206,16 @@ async def test_load_refuses_a_persisted_config_it_cannot_honour(tmp_path: Path) 
 
 
 async def test_load_supports_a_read_only_saved_index(tmp_path: Path) -> None:
+    # Given
     directory = tmp_path / "vec"
     idx = _index()
     await idx.insert([_emb("a", [1.0, 0.0, 0.0, 0.0])])
     idx.save(directory)
-    paths = [directory, *directory.rglob("*")]
-    try:
-        for path in paths:
-            path.chmod(0o555 if path.is_dir() else 0o444)
-
-        loaded = FaissVectorIndex.load("products", directory)
-        assert await loaded.search([1.0, 0.0, 0.0, 0.0], k=1) == [
-            ("a", pytest.approx(0.0, abs=1e-6))
-        ]
-    finally:
-        for path in paths:
-            path.chmod(0o755 if path.is_dir() else 0o644)
+    # When
+    loaded = _load_read_only_tree(directory)
+    result = await loaded.search([1.0, 0.0, 0.0, 0.0], k=1)
+    # Then
+    assert result == [("a", pytest.approx(0.0, abs=1e-6))]
 
 
 def test_refusal_carries_the_canonical_config_invalid_code() -> None:

@@ -446,6 +446,16 @@ Chunking is content-defined (GearCDC) and chunks are zstd-compressed. Add `--htt
 serving `origin/` over any static HTTP server or CDN, to go over the wire instead of the
 filesystem; the contract is identical and only the transport changes.
 
+Local vector snapshots are generation-addressed: a writer flushes the FAISS and state files,
+then exposes both with one atomic manifest commit. Writes, writable loads, migration, and
+snapshot cleanup share a bounded cross-process lock. **Stable read-only loads do not take that
+lock**: they pin open descriptors for one observed generation, verify both digests through
+those handles, and retry if concurrent cleanup changes the manifest set. On an immutable
+legacy 0.4.0 directory, a valid two-file pair can be read directly without creating a snapshot
+directory, migrating, or deleting either source file. A reader gets three attempts to observe
+a stable manifest set; continuing writer/GC churn then fails closed instead of returning a
+hybrid snapshot.
+
 ### Configuration: `EdgeProcSettings` + `EDGEPROC_`-prefixed env vars
 
 Deploy-time config is read lazily from the environment / `.env` via `EdgeProcSettings`
@@ -546,7 +556,9 @@ uv sync --all-extras   # core + extras + dev tooling
 uv run poe gate        # lint + format-check + mypy strict + Radon Grade A + pytest (≥90% statement+branch cov)
 ```
 
-`poe gate` mirrors CI exactly — if it passes locally, CI passes.
+`poe gate` mirrors only the hosted `CI / gate` job. The separate hosted `Secret scan / gitleaks`
+job examines the commit range introduced by a push or pull request, so a green local gate is
+not evidence that the hosted secret scan ran or passed.
 
 ## About
 

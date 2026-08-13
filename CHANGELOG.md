@@ -12,14 +12,14 @@ This corrective release supersedes 0.4.0 for applications that persist a
 ### Fixed
 - **A local vector snapshot can no longer combine files from different saves.** The FAISS
   binary and its metadata sidecar now live under a unique generation. Both are flushed before
-  one atomic manifest commit makes that generation readable. Load, save, migration, and
-  snapshot cleanup share one bounded cross-process lock; an interrupted save is ignored, the
-  previous complete generation remains recoverable, and retention is bounded to those two
-  generations. Loaded writers compare-and-swap their generation so a stale process cannot
-  erase a newer commit; file verification streams with bounded memory; snapshot-directory
-  symlinks are refused. Cleanup after an active commit is best-effort and observable, so a
-  cleanup failure cannot falsely report that the committed save failed. Valid 0.4.0 index
-  directories migrate on first load.
+  one atomic manifest commit makes that generation readable. Save, writable load, migration,
+  and snapshot cleanup share one bounded cross-process lock; an interrupted save is ignored,
+  the previous complete generation remains recoverable, and retention is bounded to those
+  two generations. Loaded writers compare-and-swap their generation so a stale process
+  cannot erase a newer commit; file verification streams with bounded memory;
+  snapshot-directory symlinks are refused. Cleanup after an active commit is best-effort and
+  observable, so a cleanup failure cannot falsely report that the committed save failed.
+  Valid writable 0.4.0 index directories migrate on first load.
 - CAS atomic writes now flush every newly created parent and shard plus the directory after
   `os.replace`, so new directory entries—not only file contents—survive a power-loss boundary
   on durable filesystems.
@@ -32,8 +32,11 @@ This corrective release supersedes 0.4.0 for applications that persist a
   so cleanup cannot unlink a file outside its cache. The publisher refuses symlinks under
   `--src`, so a source-tree alias cannot pull an external file into a signed release.
 - Read-only saved indexes load without writing their snapshot directory. Writable loads
-  retain the cross-process snapshot lock; immutable mounts read only generation-addressed,
-  digest-verified commits. CLI permission failures now render a coded refusal.
+  retain the cross-process snapshot lock; stable read-only loads do not take the snapshot
+  lock. They pin open descriptors for one stable manifest enumeration, verify both files
+  through those handles, and retry up to three times if concurrent cleanup changes the
+  manifest set before failing closed. Immutable legacy pairs load directly without migration
+  or deletion. CLI permission failures now render a coded refusal.
 - Publishing verifies and repairs reused chunk objects before advancing `latest`. A corrupt
   producer-side CAS object or flat-origin hardlink is atomically replaced from the current
   source bytes, so a successful re-publish remains syncable by a fresh device.

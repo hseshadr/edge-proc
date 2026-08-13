@@ -38,8 +38,11 @@ from edgeproc.core.settings import EdgeProcSettings
 from edgeproc.errors import CONFIG_INVALID
 from edgeproc.localvec.snapshot_store import (
     NoSnapshotError,
+    SnapshotPayload,
     SnapshotRevision,
     SnapshotStore,
+    open_regular_leaf,
+    read_regular_bytes,
 )
 from edgeproc.localvec.snapshot_store import SnapshotConflictError as _SnapshotConflictError
 
@@ -49,6 +52,7 @@ SnapshotConflictError = _SnapshotConflictError
 # remain reserved so load() can migrate an existing directory without data loss.
 _INDEX_FILE: Final[str] = "index.faiss"
 _STATE_FILE: Final[str] = "state.json"
+_READ_ONLY_LOAD_ATTEMPTS: Final[int] = 3
 
 #: The one metric this backend computes. ``IndexFlatIP`` scores inner product, which over
 #: the unit-normalized vectors ``LocalEncoder`` emits IS cosine similarity; ``_collect``
@@ -134,7 +138,7 @@ class FaissVectorIndex:
         lock = _persistence_lock(directory)
         acquired = _acquire_load_lock(lock)
         try:
-            return _restore_persisted(index_name, directory)
+            return _restore_persisted(index_name, directory, migrate_legacy=acquired)
         finally:
             if acquired:
                 lock.release()
@@ -349,8 +353,10 @@ def _acquire_load_lock(lock: BaseFileLock) -> bool:
     return True
 
 
-def _restore_persisted(index_name: str, directory: Path) -> FaissVectorIndex:
-    faiss_index, state, revision = _load_persisted(directory)
+def _restore_persisted(
+    index_name: str, directory: Path, *, migrate_legacy: bool
+) -> FaissVectorIndex:
+    faiss_index, state, revision = _load_persisted(directory, migrate_legacy=migrate_legacy)
     _validate_persisted_index(faiss_index, state)
     instance = FaissVectorIndex(index_name, state.config)
     instance._restore(faiss_index, state)
@@ -359,6 +365,14 @@ def _restore_persisted(index_name: str, directory: Path) -> FaissVectorIndex:
 
 
 def _load_persisted(
+    directory: Path, *, migrate_legacy: bool
+) -> tuple[faiss.Index, _PersistedState, SnapshotRevision | None]:
+    if migrate_legacy:
+        return _load_writable(directory)
+    return _load_read_only(directory)
+
+
+def _load_writable(
     directory: Path,
 ) -> tuple[faiss.Index, _PersistedState, SnapshotRevision]:
     store = SnapshotStore(directory)
@@ -366,15 +380,67 @@ def _load_persisted(
         payload = store.latest()
     except NoSnapshotError:
         return _migrate_legacy(directory, store)
-    state = _PersistedState.model_validate_json(payload.state_bytes)
-    return faiss.read_index(str(payload.index_path)), state, payload.revision
+    index, state = _read_snapshot(payload)
+    return index, state, payload.revision
+
+
+def _load_read_only(
+    directory: Path,
+) -> tuple[faiss.Index, _PersistedState, SnapshotRevision | None]:
+    failure = FileNotFoundError("snapshot changed during read-only load")
+    for _attempt in range(_READ_ONLY_LOAD_ATTEMPTS):
+        try:
+            return _load_read_only_once(directory)
+        except FileNotFoundError as exc:
+            failure = exc
+    raise failure
+
+
+def _read_legacy_result(
+    directory: Path,
+) -> tuple[faiss.Index, _PersistedState, None]:
+    index, state = _read_legacy(directory)
+    return index, state, None
+
+
+def _load_read_only_once(
+    directory: Path,
+) -> tuple[faiss.Index, _PersistedState, SnapshotRevision | None]:
+    if not (directory / "snapshots").exists():
+        return _read_legacy_result(directory)
+    store = SnapshotStore(directory)
+    try:
+        payload = store.latest()
+    except NoSnapshotError:
+        return _read_legacy_result(directory)
+    index, state = _read_snapshot(payload)
+    return index, state, payload.revision
+
+
+def _read_snapshot(payload: SnapshotPayload) -> tuple[faiss.Index, _PersistedState]:
+    try:
+        state = _PersistedState.model_validate_json(payload.state_bytes)
+        # faiss exports this reader at runtime but omits it from its published stub.
+        reader = faiss.PyCallbackIOReader(payload.index_file.read)  # type: ignore[attr-defined]
+        return faiss.read_index(reader), state
+    finally:
+        payload.close()
+
+
+def _read_legacy(directory: Path) -> tuple[faiss.Index, _PersistedState]:
+    index_file = open_regular_leaf(directory / _INDEX_FILE, "legacy FAISS index")
+    try:
+        state_bytes = read_regular_bytes(directory / _STATE_FILE, "legacy state sidecar")
+        reader = faiss.PyCallbackIOReader(index_file.read)  # type: ignore[attr-defined]
+        return faiss.read_index(reader), _PersistedState.model_validate_json(state_bytes)
+    finally:
+        index_file.close()
 
 
 def _migrate_legacy(
     directory: Path, store: SnapshotStore
 ) -> tuple[faiss.Index, _PersistedState, SnapshotRevision]:
-    state = _PersistedState.model_validate_json((directory / _STATE_FILE).read_bytes())
-    index = faiss.read_index(str(directory / _INDEX_FILE))
+    index, state = _read_legacy(directory)
     _validate_persisted_index(index, state)
     revision = store.commit(
         lambda path: faiss.write_index(index, str(path)), state.model_dump_json().encode()

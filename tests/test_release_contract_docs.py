@@ -300,3 +300,61 @@ def test_readme_defers_percentile_figures_to_the_operations_contract() -> None:
     assert restated == [], (
         f"README restates percentile figures {restated}; link to docs/OPERATIONS.md instead"
     )
+
+
+@pytest.mark.parametrize("document", ["README.md", "docs/QUICKSTART.md"])
+def test_local_gate_claim_separates_the_hosted_secret_scan(document: str) -> None:
+    """A green local gate predicts only its matching hosted job, not all of CI."""
+    copy = " ".join(_read(document).split())
+
+    assert "`poe gate` mirrors only the hosted `CI / gate` job." in copy
+    assert "The separate hosted `Secret scan / gitleaks` job" in copy
+    assert "If it passes locally, CI passes." not in copy
+
+
+def _registered_cli_commands() -> set[str]:
+    """Command names Typer exposes to a real ``edgeproc --help`` consumer."""
+    from edgeproc.cli import app  # noqa: PLC0415
+
+    return {
+        command.name or command.callback.__name__.replace("_", "-")
+        for command in app.registered_commands
+        if command.callback is not None
+    }
+
+
+def _documented_cli_commands() -> set[str]:
+    """Command names in ARCHITECTURE's machine-checkable CLI inventory."""
+    architecture = _read("docs/ARCHITECTURE.md")
+    inventory = architecture.split("Typer entrypoints:", maxsplit=1)[1].split("|", maxsplit=1)[0]
+    return set(re.findall(r"`([a-z-]+)`", inventory))
+
+
+def test_architecture_inventory_names_every_shipped_cli_command() -> None:
+    """Adding or documenting a command on only one side is release-contract drift."""
+    assert _documented_cli_commands() == _registered_cli_commands()
+
+
+@pytest.mark.parametrize("document", ["README.md", "docs/OPERATIONS.md", "docs/ARCHITECTURE.md"])
+def test_persistence_docs_name_the_stable_read_only_lock_free_path(document: str) -> None:
+    """Immutable consumers should not be told that every load takes the writer lock."""
+    assert "Stable read-only loads do not take that lock" in " ".join(_read(document).split())
+
+
+def test_current_changelog_names_the_stable_read_only_lock_free_path() -> None:
+    """The corrective release note records the shipped immutable-load behavior."""
+    section = _read("CHANGELOG.md").split("## [0.4.1]", maxsplit=1)[1]
+    current = " ".join(section.split("## [0.4.0]", maxsplit=1)[0].split())
+
+    assert "stable read-only loads do not take the snapshot lock" in current.lower()
+    assert "Load, save, migration, and snapshot cleanup share one bounded" not in current
+
+
+def test_release_runbook_says_the_tag_workflow_rechecks_eligibility() -> None:
+    """A tag on an arbitrary commit cannot inherit checks from another CI ref."""
+    release = _read("docs/OPERATIONS.md").split("## Release evidence", maxsplit=1)[1]
+
+    assert "It then runs all five checks itself" in release
+    assert "exact current `main` commit" in release
+    assert "green hosted `gate`, `Secret scan / gitleaks`, and `pip-audit`" in release
+    assert "full Git history" in release

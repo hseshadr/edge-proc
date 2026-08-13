@@ -34,7 +34,9 @@ uv sync --all-extras    # core + [localvec] + [bundles] + dev tooling
 uv run poe gate         # lint + format-check + mypy strict + Radon Grade A + pytest (≥90% statement+branch cov)
 ```
 
-`poe gate` is the same set of checks CI runs. If it passes locally, CI passes.
+`poe gate` mirrors only the hosted `CI / gate` job. The separate hosted `Secret scan / gitleaks`
+job examines the commit range introduced by a push or pull request, so a green local gate is
+not evidence that the hosted secret scan ran or passed.
 
 ## 2. Persist a catalog index and the model that built it
 

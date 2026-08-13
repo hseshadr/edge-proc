@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import importlib
 import json
 import os
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 
@@ -257,6 +259,33 @@ def _write_task(path: Path, *, kind: str = "search") -> None:
     )
 
 
+def _failing_reader(target: Path, error: OSError) -> Callable[[Path], str]:
+    original = Path.read_text
+
+    def read(path: Path) -> str:
+        if path == target:
+            raise error
+        return original(path)
+
+    return read
+
+
+def _install_loader_error(monkeypatch: pytest.MonkeyPatch, error: OSError) -> None:
+    loader = ModuleType("edgeproc.localvec.loader")
+
+    def fail(*_args: object, **_kwargs: object) -> object:
+        raise error
+
+    loader.__dict__["load_local_runtime"] = fail
+    monkeypatch.setitem(sys.modules, "edgeproc.localvec.loader", loader)
+
+
+def _assert_internal_refusal(result: Result) -> None:
+    assert result.exit_code == 1
+    assert "Traceback" not in result.stderr
+    assert json.loads(result.stderr)["type"] == "internal.unknown"
+
+
 def test_route_executes_search_over_a_saved_index(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -321,6 +350,20 @@ def test_route_invalid_task_json_fails_closed(tmp_path: Path) -> None:
     assert '"success"' not in result.stdout
 
 
+def test_should_map_operational_task_io_to_internal_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    task = tmp_path / "task.json"
+    _write_task(task)
+    error = OSError(errno.EIO, "operational task failure")
+    monkeypatch.setattr(Path, "read_text", _failing_reader(task, error))
+    monkeypatch.setenv("EDGEPROC_ERROR_FORMAT", "json")
+    result = runner.invoke(
+        app, ["route", "--index-dir", str(tmp_path / "idx"), "--task", str(task)]
+    )
+    _assert_internal_refusal(result)
+
+
 def test_route_missing_index_dir_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -339,25 +382,32 @@ def test_route_missing_index_dir_fails_closed(
 def test_route_maps_an_unreadable_index_to_a_coded_refusal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    loader = ModuleType("edgeproc.localvec.loader")
-
-    def unreadable(*_args: object, **_kwargs: object) -> object:
-        raise PermissionError("read-only index")
-
-    loader.__dict__["load_local_runtime"] = unreadable
-    monkeypatch.setitem(sys.modules, "edgeproc.localvec.loader", loader)
+    _install_loader_error(monkeypatch, PermissionError("read-only index"))
     monkeypatch.setattr(_cli_app_module, "build_encoder", lambda _model, _path=None: FakeEncoder())
     task = tmp_path / "task.json"
     _write_task(task)
-
     result = runner.invoke(
         app, ["route", "--index-dir", str(tmp_path / "idx"), "--task", str(task)]
     )
-
     assert result.exit_code == 1
     assert "Traceback" not in result.stderr
     assert "[config.invalid]" in result.stderr
     assert "read-only index" in result.stderr
+
+
+@pytest.mark.parametrize("error_number", [errno.EIO, errno.EMFILE])
+def test_should_map_operational_index_io_to_internal_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_number: int
+) -> None:
+    _install_loader_error(monkeypatch, OSError(error_number, "operational index failure"))
+    monkeypatch.setattr(_cli_app_module, "build_encoder", lambda _model, _path=None: FakeEncoder())
+    monkeypatch.setenv("EDGEPROC_ERROR_FORMAT", "json")
+    task = tmp_path / "task.json"
+    _write_task(task)
+    result = runner.invoke(
+        app, ["route", "--index-dir", str(tmp_path / "idx"), "--task", str(task)]
+    )
+    _assert_internal_refusal(result)
 
 
 def test_route_without_a_local_model_refuses_as_coded_config_error(

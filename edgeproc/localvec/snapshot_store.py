@@ -13,10 +13,11 @@ import hashlib
 import logging
 import os
 import re
+import stat
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Literal
+from typing import BinaryIO, Final, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -27,6 +28,7 @@ _MANIFEST_NAME: Final[re.Pattern[str]] = re.compile(r"^[0-9]{20}\.snapshot\.json
 _RETAIN_GENERATIONS: Final[int] = 2  # active snapshot plus one crash-recovery fallback
 _MAX_SEQUENCE: Final[int] = 99_999_999_999_999_999_999
 _HASH_BLOCK_BYTES: Final[int] = 512 * 1024
+_LATEST_READ_ATTEMPTS: Final[int] = 3
 _LOG = logging.getLogger(__name__)
 
 
@@ -66,9 +68,13 @@ class SnapshotManifest(BaseModel):
 class SnapshotPayload:
     """Verified paths and sidecar bytes selected by a committed manifest."""
 
-    index_path: Path
+    index_file: BinaryIO
     state_bytes: bytes
     revision: SnapshotRevision
+
+    def close(self) -> None:
+        """Release the descriptor that pins this generation across concurrent GC."""
+        self.index_file.close()
 
 
 class SnapshotStore:
@@ -118,30 +124,54 @@ class SnapshotStore:
 
     def latest(self) -> SnapshotPayload:
         """Load the newest valid commit, falling back only to an older complete one."""
-        failures: list[OSError | ValueError] = []
-        for manifest_path in sorted(self._manifest_paths(), key=_manifest_sequence, reverse=True):
-            try:
-                return self._payload(manifest_path)
-            except (OSError, ValueError) as exc:
-                failures.append(exc)
-        raise ValueError("no complete vector-index snapshot could be recovered") from failures[0]
+        for _attempt in range(_LATEST_READ_ATTEMPTS):
+            manifests = self._ordered_manifests()
+            payload, failures = self._first_complete(manifests)
+            if self._manifest_set_is_stable(manifests):
+                return _require_complete_payload(payload, failures)
+            if payload is not None:
+                payload.close()
+        raise ValueError("vector-index snapshot changed too frequently during load")
 
     def _payload(self, manifest_path: Path) -> SnapshotPayload:
-        _require_regular_leaf(manifest_path, "snapshot manifest")
-        manifest = SnapshotManifest.model_validate_json(manifest_path.read_bytes())
+        manifest = SnapshotManifest.model_validate_json(
+            read_regular_bytes(manifest_path, "snapshot manifest")
+        )
         if manifest.sequence != _manifest_sequence(manifest_path):
             raise ValueError("snapshot manifest sequence does not match its filename")
         paths = self._generation_paths(manifest.generation)
-        _require_regular_leaf(paths.index_final, "FAISS index")
-        _require_regular_leaf(paths.state_final, "state sidecar")
-        _verify_digest(paths.index_final, manifest.index_sha256, "FAISS index")
-        _verify_digest(paths.state_final, manifest.state_sha256, "state sidecar")
+        index_file, state_bytes = _open_verified_generation(paths, manifest)
         revision = SnapshotRevision(manifest.sequence, manifest.generation)
-        return SnapshotPayload(paths.index_final, paths.state_final.read_bytes(), revision)
+        return SnapshotPayload(index_file, state_bytes, revision)
 
     def _assert_current(self, expected: SnapshotRevision | None) -> None:
-        if expected is not None and self.latest().revision != expected:
+        if expected is None:
+            return
+        payload = self.latest()
+        current = payload.revision
+        payload.close()
+        if current != expected:
             raise SnapshotConflictError("vector-index snapshot changed since this instance loaded")
+
+    def _ordered_manifests(self) -> list[Path]:
+        return sorted(self._manifest_paths(), key=_manifest_sequence, reverse=True)
+
+    def _first_complete(
+        self, manifests: list[Path]
+    ) -> tuple[SnapshotPayload | None, list[OSError | ValueError]]:
+        failures: list[OSError | ValueError] = []
+        for path in manifests:
+            try:
+                return self._payload(path), failures
+            except (OSError, ValueError) as exc:
+                failures.append(exc)
+        return None, failures
+
+    def _manifest_set_is_stable(self, expected: list[Path]) -> bool:
+        try:
+            return self._ordered_manifests() == expected
+        except NoSnapshotError:
+            return False
 
     def _manifest_paths(self) -> list[Path]:
         paths = [path for path in self._snapshots.iterdir() if _MANIFEST_NAME.fullmatch(path.name)]
@@ -205,14 +235,15 @@ class SnapshotStore:
         complete: list[Path] = []
         for path in manifests:
             try:
-                self._payload(path)
+                payload = self._payload(path)
             except (OSError, ValueError):
                 continue
+            payload.close()
             complete.append(path)
         return complete
 
     def _read_manifest(self, path: Path) -> SnapshotManifest:
-        return SnapshotManifest.model_validate_json(path.read_bytes())
+        return SnapshotManifest.model_validate_json(read_regular_bytes(path, "snapshot manifest"))
 
     def _remove_unreferenced_data(self, generations: set[str]) -> None:
         for path in self._snapshots.iterdir():
@@ -260,16 +291,67 @@ def _data_generation(path: Path) -> str:
 
 
 def _digest(path: Path) -> str:
-    digest = hashlib.sha256()
     with path.open("rb") as handle:
-        while block := handle.read(_HASH_BLOCK_BYTES):
-            digest.update(block)
+        return _file_digest(handle)
+
+
+def _file_digest(handle: BinaryIO) -> str:
+    digest = hashlib.sha256()
+    while block := handle.read(_HASH_BLOCK_BYTES):
+        digest.update(block)
     return digest.hexdigest()
 
 
-def _verify_digest(path: Path, expected: str, label: str) -> None:
-    if _digest(path) != expected:
+def _verify_file_digest(handle: BinaryIO, expected: str, label: str) -> None:
+    if _file_digest(handle) != expected:
         raise ValueError(f"persisted {label} digest does not match snapshot manifest")
+
+
+def _verified_regular_bytes(path: Path, expected: str, label: str) -> bytes:
+    data = read_regular_bytes(path, label)
+    if hashlib.sha256(data).hexdigest() != expected:
+        raise ValueError(f"persisted {label} digest does not match snapshot manifest")
+    return data
+
+
+def _open_verified_generation(
+    paths: _GenerationPaths, manifest: SnapshotManifest
+) -> tuple[BinaryIO, bytes]:
+    index_file = open_regular_leaf(paths.index_final, "FAISS index")
+    try:
+        state = _verified_regular_bytes(paths.state_final, manifest.state_sha256, "state sidecar")
+        _verify_file_digest(index_file, manifest.index_sha256, "FAISS index")
+        index_file.seek(0)
+    except (OSError, ValueError):
+        index_file.close()
+        raise
+    return index_file, state
+
+
+def read_regular_bytes(path: Path, label: str) -> bytes:
+    """Read one no-follow regular leaf through the descriptor that passed ``fstat``."""
+    with open_regular_leaf(path, label) as handle:
+        return handle.read()
+
+
+def open_regular_leaf(path: Path, label: str) -> BinaryIO:
+    """Open one regular leaf without following a final-component symlink."""
+    if path.is_symlink():
+        raise ValueError(f"{label} must be a regular file, not a symlink or non-file")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    if stat.S_ISREG(os.fstat(fd).st_mode):
+        return os.fdopen(fd, "rb")
+    os.close(fd)
+    raise ValueError(f"{label} must be a regular file, not a symlink or non-file")
+
+
+def _require_complete_payload(
+    payload: SnapshotPayload | None, failures: list[OSError | ValueError]
+) -> SnapshotPayload:
+    if payload is not None:
+        return payload
+    raise ValueError("no complete vector-index snapshot could be recovered") from failures[0]
 
 
 def _write_fsynced(path: Path, data: bytes) -> None:
@@ -312,8 +394,3 @@ def _durable_mkdir(path: Path) -> None:
 def _require_real_directory(path: Path, label: str) -> None:
     if path.is_symlink() or not path.is_dir():
         raise ValueError(f"{label} must be a real directory, not a symlink or non-directory")
-
-
-def _require_regular_leaf(path: Path, label: str) -> None:
-    if path.is_symlink() or not path.is_file():
-        raise ValueError(f"{label} must be a regular file, not a symlink or non-file")
