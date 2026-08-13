@@ -140,6 +140,17 @@ def test_put_chunk_compressed_rejects_decompression_bomb(tmp_path: Path) -> None
     assert store.has_chunk(chunk_hash) is False  # fail-closed cleanup
 
 
+def test_put_chunk_compressed_rejects_content_address_mismatch(tmp_path: Path) -> None:
+    # Given
+    store = _store(tmp_path)
+    claimed_hash = _chunk_hash(b"claimed payload")
+
+    # When / Then
+    with pytest.raises(IntegrityError, match="content-address check"):
+        store.put_chunk_compressed(claimed_hash, zstandard.compress(b"different payload"))
+    assert store.has_chunk(claimed_hash) is False
+
+
 def test_put_chunk_compressed_rejects_digest_path_traversal(tmp_path: Path) -> None:
     # Given
     victim = tmp_path / "victim"
