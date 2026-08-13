@@ -52,6 +52,24 @@ def test_readme_links_the_operations_contract() -> None:
     assert "docs/OPERATIONS.md" in _read("README.md")
 
 
+def test_readme_leads_with_the_real_end_to_end_demo() -> None:
+    """A cold reader reaches a runnable result before the long explanation."""
+    readme = _read("README.md")
+    quickstart = readme.index("## Quickstart")
+    story = readme.index("## The problem, as a story")
+
+    assert quickstart < story
+    assert "bash examples/run_loop.sh" in readme[quickstart:story]
+
+
+def test_readme_distinguishes_source_main_from_the_published_package() -> None:
+    """Prepared release docs must not imply an unpublished wheel exists."""
+    readme = _read("README.md")
+
+    assert "Source `main` is 0.4.0" in readme
+    assert "PyPI currently serves 0.3.1" in readme
+
+
 def test_budget_copy_distinguishes_admission_from_native_rss_enforcement() -> None:
     readme = _read("README.md")
     assert "MemoryManager" in readme

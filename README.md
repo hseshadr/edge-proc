@@ -7,6 +7,29 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/downloads/)
 
+## Quickstart
+
+Run the complete path against a realistic outdoor catalog: build a local search index,
+sign and publish it, sync it into a clean device cache, search it with the network
+disabled, then prove the same device refuses to run without a verified model.
+
+```bash
+git clone https://github.com/hseshadr/edge-proc.git
+cd edge-proc
+uv sync --all-extras
+bash examples/run_loop.sh
+```
+
+The first run downloads an 87 MB embedding model on the simulated build machine and can
+take about a minute. The simulated device never downloads it: the model travels inside
+the signed bundle. If you want to inspect every command and its output before running it,
+continue to [See it work](#see-it-work).
+
+**Artifact status:** Source `main` is 0.4.0, prepared for release. PyPI currently serves 0.3.1.
+Install `edge-proc==0.3.1` for the published package; use this source tree to evaluate
+the 0.4.0 fail-closed offline contract. Do not assume source release notes are
+already present in a registry artifact.
+
 ## The problem, as a story
 
 When a video game ships an update, your console doesn't re-download the whole 80 GB game. It
@@ -493,7 +516,7 @@ documents is a number that will eventually disagree with itself.
 
 ## Status & roadmap
 
-**Shipped (v0):** a deterministic non-AI router, a FAISS-backed local-vector runtime (`EMBED` /
+**Shipped in source:** a deterministic non-AI router, a FAISS-backed local-vector runtime (`EMBED` /
 `SEARCH` / `RANK`), and a content-addressed, signed-bundle sync substrate (pinned ed25519 +
 content-defined chunking), all behind opt-in extras.
 
