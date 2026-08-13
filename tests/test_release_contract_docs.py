@@ -62,12 +62,14 @@ def test_readme_leads_with_the_real_end_to_end_demo() -> None:
     assert "bash examples/run_loop.sh" in readme[quickstart:story]
 
 
-def test_readme_distinguishes_source_main_from_the_published_package() -> None:
-    """Prepared release docs must not imply an unpublished wheel exists."""
+def test_release_copy_stays_true_before_and_after_registry_propagation() -> None:
+    """Published metadata must not freeze a temporary registry state into the wheel."""
     readme = _read("README.md")
+    workflow = _read(".github/workflows/publish.yml")
 
-    assert "Source `main` is 0.4.0" in readme
-    assert "PyPI currently serves 0.3.1" in readme
+    assert "This README documents EdgeProc 0.4.0" in readme
+    assert "PyPI currently serves" not in readme
+    assert "edge-proc is not yet on PyPI" not in workflow
 
 
 def test_budget_copy_distinguishes_admission_from_native_rss_enforcement() -> None:

@@ -8,14 +8,13 @@
 # names the ci repo's file (hseshadr/ci/.github/workflows/python-publish.yml) — never
 # this repo's publish.yml, which is what the trusted publisher is registered against.
 # Cross-repo reuse therefore ALWAYS fails with "invalid-publisher". The job below
-# reproduces the hseshadr/ci python-publish.yml steps (ci-v2.0.3; action pins copied
+# reproduces the hseshadr/ci python-publish.yml steps (ci-v3.2.1; action pins copied
 # verbatim) so `job_workflow_ref` names THIS file and the registered publisher matches.
 #
-# One-time bootstrap (deferred — needs a human): register the GitHub Actions trusted
-# publisher on PyPI as a PENDING publisher (edge-proc is not yet on PyPI), against
-# {owner, edge-proc, publish.yml}. After the first OIDC publish creates the project,
-# every `git tag vX.Y.Z && git push --tags` releases automatically. The workflow filename
-# + repo + owner ARE the credential — no `twine` password, no stored API token.
+# The PyPI project registers this GitHub Actions trusted publisher against
+# {owner: hseshadr, repository: edge-proc, workflow: publish.yml}. A `vX.Y.Z` tag push
+# releases through that identity. The workflow filename + repo + owner ARE the
+# credential — no `twine` password, no stored API token.
 #
 # The publish re-runs `uv run poe gate` on the tagged ref before building, so nothing
 # ships unless it passes the same gate CI enforces.
