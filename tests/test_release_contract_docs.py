@@ -12,10 +12,27 @@ sys.path.insert(0, str(ROOT_FOR_IMPORT / "benchmarks"))
 from benchmark import BUDGETS  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
+RELEASE_VERSION = "0.4.0"
 
 
 def _read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
+
+
+def test_installable_version_names_the_offline_contract_release() -> None:
+    """Breaking offline behavior must never hide under the previously published version."""
+    from edgeproc import __version__  # noqa: PLC0415
+
+    assert __version__ == RELEASE_VERSION
+    assert f"## [{RELEASE_VERSION}]" in _read("CHANGELOG.md")
+
+
+def test_publish_verification_allows_bounded_registry_propagation() -> None:
+    """A successful upload gets ten minutes to become independently observable."""
+    workflow = _read(".github/workflows/publish.yml")
+    assert "for attempt in $(seq 1 60)" in workflow
+    assert "Attempt ${attempt}/60" in workflow
+    assert "after ~10m" in workflow
 
 
 @pytest.mark.parametrize(

@@ -4,6 +4,11 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-08-12
+
+This release makes the documented cold-device offline contract installable. It is a
+breaking release because implicit model downloads now refuse by default.
+
 ### Fixed
 - **"Works offline" was false on a cold device, and is now true.** The README promised that
   "after one sync the device needs no network at all to keep answering queries". `sync`

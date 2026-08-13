@@ -86,15 +86,16 @@ jobs:
           echo "Verifying ${name}==${version} is served by PyPI..."
 
           # Registries have propagation delay, so retry — but a timeout is a FAILURE,
-          # never a pass. Bounded: 6 attempts, 10s apart (~60s).
-          for attempt in 1 2 3 4 5 6; do
+          # never a pass. Bounded: 60 attempts, 10s apart (~10m). PyPI has taken longer
+          # than one minute after a successful upload in a witnessed production release.
+          for attempt in $(seq 1 60); do
             if curl -fsS --max-time 15 -o /dev/null "$url"; then
               echo "Verified: ${name}==${version} is live on PyPI."
               exit 0
             fi
-            echo "Attempt ${attempt}/6: not served yet; retrying in 10s..."
+            echo "Attempt ${attempt}/60: not served yet; retrying in 10s..."
             sleep 10
           done
 
-          echo "::error::PUBLISH VERIFICATION FAILED — the upload step reported success, but PyPI does not serve ${name}==${version} (${url}) after ~60s. A green upload is not proof of a release. Most likely cause: an incomplete PyPI trusted-publisher bootstrap, or a job_workflow_ref/publisher mismatch. Check the project's Publishing settings, or the account-level pending publisher, on PyPI."
+          echo "::error::PUBLISH VERIFICATION FAILED — the upload step reported success, but PyPI does not serve ${name}==${version} (${url}) after ~10m. A green upload is not proof of a release. Most likely cause: an incomplete PyPI trusted-publisher bootstrap, or a job_workflow_ref/publisher mismatch. Check the project's Publishing settings, or the account-level pending publisher, on PyPI."
           exit 1
