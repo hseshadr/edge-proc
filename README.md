@@ -25,10 +25,10 @@ take about a minute. The simulated device never downloads it: the model travels 
 the signed bundle. If you want to inspect every command and its output before running it,
 continue to [See it work](#see-it-work).
 
-**Artifact status:** Source `main` is 0.4.0, prepared for release. PyPI currently serves 0.3.1.
-Install `edge-proc==0.3.1` for the published package; use this source tree to evaluate
-the 0.4.0 fail-closed offline contract. Do not assume source release notes are
-already present in a registry artifact.
+**Artifact status:** This README documents EdgeProc 0.4.0. The
+[PyPI project](https://pypi.org/project/edge-proc/) is the source of truth for versions
+available from the registry; the [changelog](CHANGELOG.md) separates shipped behavior
+from unreleased work.
 
 ## The problem, as a story
 
