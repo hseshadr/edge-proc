@@ -11,7 +11,7 @@ connection): about **70 seconds of machine time** and about **1.4 GB of disk**.
 | | measured |
 |---|---|
 | `uv sync --all-extras` | 5.5 s, 75 packages, 947 MB venv (torch + FAISS dominate) |
-| `uv run poe gate` | ~20 s, 435 tests |
+| `uv run poe gate` | ~20 s, full test suite |
 | step 2, first run | 45 s — the one-time `all-MiniLM-L6-v2` download is 87 MB of it |
 | steps 3–7 | 21 s — publish and sync move that 87 MB model too |
 

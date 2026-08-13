@@ -110,6 +110,12 @@ def test_ci_documents_core_as_a_locked_pypi_dependency() -> None:
     assert "pulled from public GitHub via the git source" not in workflow
 
 
+def test_quickstart_does_not_freeze_a_stale_test_count() -> None:
+    quickstart = _read("docs/QUICKSTART.md")
+    assert "`uv run poe gate` | ~20 s, full test suite" in quickstart
+    assert not re.search(r"`uv run poe gate` \|[^\n]*\b\d+ tests\b", quickstart)
+
+
 def test_corrective_release_names_every_symlink_containment_fix() -> None:
     section = (
         _read("CHANGELOG.md").split("## [0.4.1]", maxsplit=1)[1].split("## [0.4.0]", maxsplit=1)[0]
