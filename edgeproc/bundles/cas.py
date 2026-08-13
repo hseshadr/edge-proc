@@ -116,11 +116,37 @@ def _atomic_write(target: Path, data: bytes) -> None:
     """Write ``data`` to ``target`` atomically via a fsynced same-dir temp + replace."""
     tmp = target.with_name(f"{target.name}.tmp.{os.getpid()}")
     fd = _open_exclusive_temp(tmp)
-    with os.fdopen(fd, "wb") as handle:
-        handle.write(data)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(tmp, target)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, target)
+        _fsync_directory(target.parent)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _fsync_directory(path: Path) -> None:
+    """Persist a rename/unlink in ``path`` instead of only flushing file contents."""
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    fd = os.open(path, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _durable_mkdir(path: Path) -> None:
+    """Create every missing component and durably link it from its parent."""
+    missing: list[Path] = []
+    cursor = path
+    while not cursor.exists():
+        missing.append(cursor)
+        cursor = cursor.parent
+    for directory in reversed(missing):
+        directory.mkdir(exist_ok=True)
+        _fsync_directory(directory.parent)
 
 
 class FilesystemCacheStore:
@@ -134,7 +160,7 @@ class FilesystemCacheStore:
         mutation_lock_timeout: float | None = None,
     ) -> None:
         self._root = root
-        self._root.mkdir(parents=True, exist_ok=True)
+        _durable_mkdir(self._root)
         # FROZEN CAS layout contract: a producer's origin dir and a consumer's cache both
         # address objects via these exact subdirs/names. Renaming any breaks existing stores.
         self._prepare_directory("chunks")
@@ -165,7 +191,7 @@ class FilesystemCacheStore:
             raise IntegrityError(str(exc)) from exc
 
     def _prepare_directory(self, name: str) -> None:
-        (self._root / name).mkdir(parents=True, exist_ok=True)
+        _durable_mkdir(self._root / name)
         self._store_path(name)
 
     def _chunk_path(self, chunk_hash: str) -> Path:
@@ -184,7 +210,7 @@ class FilesystemCacheStore:
         path = self._chunk_path(chunk_hash)
         if path.is_file():
             return chunk_hash  # idempotent: content-addressed, never rewritten
-        path.parent.mkdir(parents=True, exist_ok=True)
+        _durable_mkdir(path.parent)
         _atomic_write(path, zstandard.compress(plaintext))
         return chunk_hash
 
@@ -197,7 +223,7 @@ class FilesystemCacheStore:
         bad file and raise :class:`IntegrityError`.
         """
         path = self._chunk_path(chunk_hash)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        _durable_mkdir(path.parent)
         _atomic_write(path, compressed)
         self._verify_or_remove(path, chunk_hash)
 

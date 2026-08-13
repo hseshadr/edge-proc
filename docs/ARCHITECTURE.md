@@ -99,6 +99,11 @@ Chunk-level deduplication is the reason `v1.0.0 → v1.0.1` is a delta, not a fu
 
 Heavy dependencies are opt-in. Installing the core gives you `Task`, the router, and the CLI shell. `[localvec]` brings FAISS + sentence-transformers. `[bundles]` brings cryptography + zstandard.
 
+`FaissVectorIndex.save()` treats the FAISS binary and metadata as one value: it flushes
+generation-addressed files, then publishes one atomic manifest. Save/load/migration/GC share
+a bounded cross-process lock, and only the current plus previous complete generation remain.
+An interrupted generation is never paired with another generation's sidecar.
+
 ## Where the seams are
 
 Three protocol seams are kept in v0 so future runtimes drop in without breaking consumers:

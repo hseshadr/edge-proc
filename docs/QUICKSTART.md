@@ -11,7 +11,7 @@ connection): about **70 seconds of machine time** and about **1.4 GB of disk**.
 | | measured |
 |---|---|
 | `uv sync --all-extras` | 5.5 s, 75 packages, 947 MB venv (torch + FAISS dominate) |
-| `uv run poe gate` | 37 s, 309 tests |
+| `uv run poe gate` | ~20 s, 419 tests |
 | step 2, first run | 45 s — the one-time `all-MiniLM-L6-v2` download is 87 MB of it |
 | steps 3–7 | 21 s — publish and sync move that 87 MB model too |
 
@@ -38,8 +38,9 @@ uv run poe gate         # lint + format-check + mypy strict + Radon Grade A + py
 
 ## 2. Persist a catalog index and the model that built it
 
-A `route` call needs two things on disk: an index (the FAISS file + a small `state.json`
-sidecar) and the embedding model, so the device can encode a query without calling anyone.
+A `route` call needs two things on disk: an index (generation-addressed FAISS + state files
+committed by one snapshot manifest) and the embedding model, so the device can encode a query
+without calling anyone.
 
 ```bash
 cat > save_index.py <<'PY'
@@ -77,7 +78,7 @@ asyncio.run(main())
 PY
 
 EDGEPROC_ALLOW_MODEL_DOWNLOAD=1 uv run python save_index.py
-#   catalog_idx/{index.faiss,state.json} and an 87 MB model/
+#   catalog_idx/snapshots/{manifest,FAISS,state} and an 87 MB model/
 ```
 
 `EDGEPROC_ALLOW_MODEL_DOWNLOAD=1` is the only network access in this walkthrough. You are on a

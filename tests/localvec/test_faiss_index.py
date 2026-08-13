@@ -6,19 +6,33 @@ Vectors are dim-4 and axis-aligned so inner-product ranking is hand-verifiable.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import multiprocessing
+import os
+import shutil
+import tracemalloc
+from multiprocessing.connection import Connection
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread
 
 import pytest
+from edgeproc_core.vector_mgmt.conformance import assert_vector_index_conformance
 from edgeproc_core.vector_mgmt.core.types import (
     IndexConfig,
     VectorEmbedding,
     VectorIndex,
 )
+from filelock import FileLock, Timeout
 
 from edgeproc import errors
-from edgeproc.localvec.faiss_index import FaissVectorIndex, UnsupportedIndexOptionError
+from edgeproc.localvec import snapshot_store
+from edgeproc.localvec.faiss_index import (
+    FaissVectorIndex,
+    SnapshotConflictError,
+    UnsupportedIndexOptionError,
+)
+from edgeproc.localvec.snapshot_store import SnapshotSequenceError, SnapshotStore
 
 
 def _index() -> FaissVectorIndex:
@@ -29,8 +43,60 @@ def _emb(entity_id: str, vector: list[float], **meta: str) -> VectorEmbedding:
     return VectorEmbedding(entity_id=entity_id, embedding=vector, metadata=dict(meta))
 
 
+def _committed_files(directory: Path) -> tuple[Path, Path]:
+    manifest_path = max((directory / "snapshots").glob("*.snapshot.json"))
+    manifest = json.loads(manifest_path.read_text())
+    generation = manifest["generation"]
+    return (
+        directory / "snapshots" / f"{generation}.faiss",
+        directory / "snapshots" / f"{generation}.state.json",
+    )
+
+
+def _snapshot_manifests(directory: Path) -> list[Path]:
+    return sorted((directory / "snapshots").glob("*.snapshot.json"))
+
+
+def _write_committed_state(directory: Path, state: dict[str, object]) -> None:
+    state_path = _committed_files(directory)[1]
+    state_bytes = json.dumps(state).encode()
+    state_path.write_bytes(state_bytes)
+    manifest_path = _snapshot_manifests(directory)[-1]
+    manifest = json.loads(manifest_path.read_text())
+    manifest["state_sha256"] = hashlib.sha256(state_bytes).hexdigest()
+    manifest_path.write_text(json.dumps(manifest))
+
+
+def _hold_snapshot_lock(lock_path: str, ready: Connection, release: Connection) -> None:
+    with FileLock(lock_path):
+        ready.send(True)
+        release.recv()
+
+
+def _commit_loaded_writer(
+    directory: str, entity_id: str, ready: Connection, go: Connection
+) -> None:
+    index = FaissVectorIndex.load("products", Path(directory))
+    asyncio.run(index.insert([_emb(entity_id, [0.0, 1.0, 0.0, 0.0])]))
+    ready.send(True)
+    go.recv()
+    try:
+        index.save(Path(directory))
+    except SnapshotConflictError:
+        ready.send("conflict")
+    else:
+        ready.send("saved")
+
+
 def test_satisfies_the_shared_libs_protocol() -> None:
     assert isinstance(_index(), VectorIndex)
+
+
+async def test_passes_the_supported_core_conformance_suite() -> None:
+    async def factory(name: str, config: IndexConfig | None = None) -> FaissVectorIndex:
+        return FaissVectorIndex(name, config)
+
+    await assert_vector_index_conformance(factory)
 
 
 async def test_search_returns_nearest_first_as_cosine_distance() -> None:
@@ -66,6 +132,23 @@ async def test_delete_tombstones_so_search_skips_it() -> None:
     await idx.delete(["a"])
     results = await idx.search([1.0, 0.0, 0.0, 0.0], k=5)
     assert "a" not in {doc for doc, _ in results}
+
+
+async def test_scoped_delete_and_stats_match_the_supported_core_protocol() -> None:
+    idx = _index()
+    await idx.insert(
+        [
+            _emb("tenant-a", [1.0, 0.0, 0.0, 0.0], tenant_id="a"),
+            _emb("tenant-b", [0.0, 1.0, 0.0, 0.0], tenant_id="b"),
+        ]
+    )
+
+    await idx.delete(["tenant-a", "tenant-b"], filters={"tenant_id": "a"})
+
+    assert [item for item, _ in await idx.search([0.0, 1.0, 0.0, 0.0], 5)] == ["tenant-b"]
+    scoped = await idx.get_stats(filters={"tenant_id": "b"})
+    assert scoped.vector_count == 1
+    assert scoped.tombstone_count == 0
 
 
 async def test_reinsert_after_delete_purges_stale_row() -> None:
@@ -248,12 +331,459 @@ async def test_save_serializes_with_rebuild_and_load_rejects_crash_mismatch(
     loaded = FaissVectorIndex.load("products", tmp_path / "vec")
     assert (await loaded.get_stats()).vector_count == 1
 
-    state_path = tmp_path / "vec" / "state.json"
+    state_path = _committed_files(tmp_path / "vec")[1]
     state = json.loads(state_path.read_text())
     state["faiss_ids"] = []
-    state_path.write_text(json.dumps(state))
+    _write_committed_state(tmp_path / "vec", state)
     with pytest.raises(ValueError, match="row count"):
         FaissVectorIndex.load("products", tmp_path / "vec")
+
+
+async def test_failed_second_snapshot_rename_never_loads_same_shape_hybrid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given an old one-row snapshot and a same-shaped replacement with different meaning
+    directory = tmp_path / "vec"
+    old = _index()
+    await old.insert([_emb("red", [1.0, 0.0, 0.0, 0.0], color="red")])
+    old.save(directory)
+    new = _index()
+    await new.insert([_emb("blue", [0.0, 1.0, 0.0, 0.0], color="blue")])
+    real_replace = os.replace
+    calls = 0
+
+    def fail_second_replace(src: object, dst: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("simulated crash on second snapshot rename")
+        real_replace(src, dst)
+
+    # When the second file promotion fails after the first one became visible
+    monkeypatch.setattr(os, "replace", fail_second_replace)
+    with pytest.raises(OSError, match="second snapshot rename"):
+        new.save(directory)
+    monkeypatch.setattr(os, "replace", real_replace)
+
+    # Then load returns the last complete generation, never a cross-generation hybrid
+    loaded = FaissVectorIndex.load("products", directory)
+    red = await loaded.search([1.0, 0.0, 0.0, 0.0], k=1)
+    blue = await loaded.search([0.0, 1.0, 0.0, 0.0], k=1)
+    assert red == [("red", pytest.approx(0.0, abs=1e-6))]
+    assert blue == [("red", pytest.approx(1.0, abs=1e-6))]
+
+
+async def test_load_migrates_a_complete_legacy_pair_to_one_snapshot_commit(
+    tmp_path: Path,
+) -> None:
+    # Given a valid index directory saved by 0.4.0
+    source = tmp_path / "source"
+    legacy = tmp_path / "legacy"
+    legacy.mkdir()
+    idx = _index()
+    await idx.insert([_emb("red", [1.0, 0.0, 0.0, 0.0])])
+    idx.save(source)
+    index_path, state_path = _committed_files(source)
+    shutil.copyfile(index_path, legacy / "index.faiss")
+    shutil.copyfile(state_path, legacy / "state.json")
+
+    # When the legacy directory is loaded
+    loaded = FaissVectorIndex.load("products", legacy)
+
+    # Then it is readable and durably migrated away from the two-file active format
+    assert await loaded.search([1.0, 0.0, 0.0, 0.0], k=1) == [("red", pytest.approx(0.0, abs=1e-6))]
+    assert len(list((legacy / "snapshots").glob("*.snapshot.json"))) == 1
+    assert not (legacy / "index.faiss").exists()
+    assert not (legacy / "state.json").exists()
+
+
+async def test_load_recovers_previous_generation_when_newest_manifest_is_corrupt(
+    tmp_path: Path,
+) -> None:
+    # Given two committed generations and a corrupted newest commit record
+    directory = tmp_path / "vec"
+    old = _index()
+    await old.insert([_emb("red", [1.0, 0.0, 0.0, 0.0])])
+    old.save(directory)
+    new = _index()
+    await new.insert([_emb("blue", [0.0, 1.0, 0.0, 0.0])])
+    new.save(directory)
+    _snapshot_manifests(directory)[-1].write_bytes(b'{"format_version":')
+
+    # When loading after the corrupt pointer is observed
+    loaded = FaissVectorIndex.load("products", directory)
+
+    # Then only the previous complete generation is recovered
+    assert await loaded.search([1.0, 0.0, 0.0, 0.0], k=1) == [("red", pytest.approx(0.0, abs=1e-6))]
+
+
+async def test_stale_writer_cannot_overwrite_a_cross_process_commit(tmp_path: Path) -> None:
+    directory = tmp_path / "vec"
+    base = _index()
+    await base.insert([_emb("base", [1.0, 0.0, 0.0, 0.0])])
+    base.save(directory)
+    context = multiprocessing.get_context("spawn")
+    ready_a, send_a = context.Pipe(duplex=False)
+    ready_b, send_b = context.Pipe(duplex=False)
+    go_a, release_a = context.Pipe(duplex=False)
+    go_b, release_b = context.Pipe(duplex=False)
+    writer_a = context.Process(
+        target=_commit_loaded_writer,
+        args=(str(directory), "writer-a", send_a, go_a),
+    )
+    writer_b = context.Process(
+        target=_commit_loaded_writer,
+        args=(str(directory), "writer-b", send_b, go_b),
+    )
+    writer_a.start()
+    writer_b.start()
+    assert ready_a.recv() is True
+    assert ready_b.recv() is True
+
+    release_a.send(True)
+    assert ready_a.recv() == "saved"
+    release_b.send(True)
+    assert ready_b.recv() == "conflict"
+    writer_a.join(timeout=5)
+    writer_b.join(timeout=5)
+    assert writer_a.exitcode == writer_b.exitcode == 0
+    loaded = FaissVectorIndex.load("products", directory)
+    assert {item for item, _ in await loaded.search([1.0, 0.0, 0.0, 0.0], k=5)} == {
+        "base",
+        "writer-a",
+    }
+
+
+async def test_load_rejects_same_shape_index_swapped_across_generations(tmp_path: Path) -> None:
+    # Given two same-shaped commits whose newest FAISS file is replaced by the older bytes
+    directory = tmp_path / "vec"
+    old = _index()
+    await old.insert([_emb("red", [1.0, 0.0, 0.0, 0.0])])
+    old.save(directory)
+    new = _index()
+    await new.insert([_emb("blue", [0.0, 1.0, 0.0, 0.0])])
+    new.save(directory)
+    manifests = [json.loads(path.read_text()) for path in _snapshot_manifests(directory)]
+    old_index = directory / "snapshots" / f"{manifests[0]['generation']}.faiss"
+    new_index = directory / "snapshots" / f"{manifests[1]['generation']}.faiss"
+    shutil.copyfile(old_index, new_index)
+
+    # When load sees a binary that still passes row-count and dimension checks
+    loaded = FaissVectorIndex.load("products", directory)
+
+    # Then its manifest digest rejects the hybrid and recovers the old complete generation
+    assert await loaded.search([1.0, 0.0, 0.0, 0.0], k=1) == [("red", pytest.approx(0.0, abs=1e-6))]
+
+
+async def test_load_ignores_newest_manifest_with_a_stale_sequence_claim(tmp_path: Path) -> None:
+    # Given a newest filename whose signed-in content claims the previous sequence
+    directory = tmp_path / "vec"
+    old = _index()
+    await old.insert([_emb("red", [1.0, 0.0, 0.0, 0.0])])
+    old.save(directory)
+    new = _index()
+    await new.insert([_emb("blue", [0.0, 1.0, 0.0, 0.0])])
+    new.save(directory)
+    newest = _snapshot_manifests(directory)[-1]
+    stale = json.loads(newest.read_text())
+    stale["sequence"] = 1
+    newest.write_text(json.dumps(stale))
+
+    # When loading the directory
+    loaded = FaissVectorIndex.load("products", directory)
+
+    # Then the stale commit record cannot select its generation
+    assert await loaded.search([1.0, 0.0, 0.0, 0.0], k=1) == [("red", pytest.approx(0.0, abs=1e-6))]
+
+
+async def test_save_bounds_snapshot_retention_to_current_and_recovery_generation(
+    tmp_path: Path,
+) -> None:
+    # Given more successful saves than recovery needs
+    directory = tmp_path / "vec"
+    for number in range(5):
+        idx = _index()
+        await idx.insert([_emb(f"item-{number}", [1.0, 0.0, 0.0, 0.0])])
+        idx.save(directory)
+
+    # When the post-commit collector runs
+    manifests = _snapshot_manifests(directory)
+    data_files = list((directory / "snapshots").glob("*.*"))
+
+    # Then disk use is bounded to the active generation plus one recovery generation
+    assert len(manifests) == 2
+    assert len([path for path in data_files if path.suffix == ".faiss"]) == 2
+    assert len([path for path in data_files if path.name.endswith(".state.json")]) == 2
+    loaded = FaissVectorIndex.load("products", directory)
+    assert [doc for doc, _ in await loaded.search([1.0, 0.0, 0.0, 0.0], k=1)] == ["item-4"]
+
+
+async def test_save_waits_for_the_real_cross_process_snapshot_lock(tmp_path: Path) -> None:
+    # Given the OS-backed lock held by a separate spawned process
+    directory = tmp_path / "vec"
+    directory.mkdir()
+    idx = _index()
+    await idx.insert([_emb("red", [1.0, 0.0, 0.0, 0.0])])
+    context = multiprocessing.get_context("spawn")
+    ready_receive, ready_send = context.Pipe(duplex=False)
+    release_receive, release_send = context.Pipe(duplex=False)
+    owner = context.Process(
+        target=_hold_snapshot_lock,
+        args=(str(directory / ".snapshot.lock"), ready_send, release_receive),
+    )
+    owner.start()
+    assert ready_receive.poll(timeout=5)
+    assert ready_receive.recv() is True
+    finished = Event()
+    failures: list[Exception] = []
+
+    def save() -> None:
+        try:
+            idx.save(directory)
+        except Exception as exc:  # test thread must report every unexpected failure
+            failures.append(exc)
+        finally:
+            finished.set()
+
+    # When save starts while another process-compatible lock owner is active
+    thread = Thread(target=save)
+    thread.start()
+
+    # Then it cannot enter the snapshot/GC boundary until that owner releases it
+    assert not finished.wait(timeout=0.1)
+    release_send.send(True)
+    assert finished.wait(timeout=5)
+    thread.join(timeout=5)
+    owner.join(timeout=5)
+    assert owner.exitcode == 0
+    assert failures == []
+
+
+async def test_snapshot_lock_wait_is_bounded_by_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a separate process holding the lock past a configured short deadline
+    directory = tmp_path / "vec"
+    directory.mkdir()
+    idx = _index()
+    await idx.insert([_emb("red", [1.0, 0.0, 0.0, 0.0])])
+    context = multiprocessing.get_context("spawn")
+    ready_receive, ready_send = context.Pipe(duplex=False)
+    release_receive, release_send = context.Pipe(duplex=False)
+    owner = context.Process(
+        target=_hold_snapshot_lock,
+        args=(str(directory / ".snapshot.lock"), ready_send, release_receive),
+    )
+    owner.start()
+    assert ready_receive.poll(timeout=5)
+    assert ready_receive.recv() is True
+    monkeypatch.setenv("EDGEPROC_SNAPSHOT_LOCK_TIMEOUT", "0.05")
+
+    # When save cannot acquire the complete persistence boundary in time
+    with pytest.raises(Timeout):
+        idx.save(directory)
+
+    # Then it fails instead of waiting forever, and the owner exits normally
+    release_send.send(True)
+    owner.join(timeout=5)
+    assert owner.exitcode == 0
+
+
+async def test_load_waits_until_snapshot_gc_finishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a save paused inside GC after publishing its manifest
+    directory = tmp_path / "vec"
+    old = _index()
+    await old.insert([_emb("red", [1.0, 0.0, 0.0, 0.0])])
+    old.save(directory)
+    new = _index()
+    await new.insert([_emb("blue", [0.0, 1.0, 0.0, 0.0])])
+    entered_gc = Event()
+    release_gc = Event()
+    original_gc = SnapshotStore._remove_unreferenced_data
+
+    def paused_gc(store: SnapshotStore, generations: set[str]) -> None:
+        entered_gc.set()
+        assert release_gc.wait(timeout=5)
+        original_gc(store, generations)
+
+    monkeypatch.setattr(SnapshotStore, "_remove_unreferenced_data", paused_gc)
+    save_thread = Thread(target=new.save, args=(directory,))
+    save_thread.start()
+    assert entered_gc.wait(timeout=5)
+    loaded: list[FaissVectorIndex] = []
+    load_thread = Thread(target=lambda: loaded.append(FaissVectorIndex.load("products", directory)))
+    load_thread.start()
+
+    # When load races the collector, it cannot observe files during the sweep
+    load_thread.join(timeout=0.1)
+    assert load_thread.is_alive()
+    release_gc.set()
+    save_thread.join(timeout=5)
+    load_thread.join(timeout=5)
+
+    # Then it sees the newly committed generation after the whole boundary completes
+    assert [doc for doc, _ in await loaded[0].search([0.0, 1.0, 0.0, 0.0], k=1)] == ["blue"]
+
+
+async def test_failed_manifest_commit_keeps_old_generation_and_gc_removes_orphans(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a complete old generation and failure at the sole commit rename
+    directory = tmp_path / "vec"
+    old = _index()
+    await old.insert([_emb("red", [1.0, 0.0, 0.0, 0.0])])
+    old.save(directory)
+    new = _index()
+    await new.insert([_emb("blue", [0.0, 1.0, 0.0, 0.0])])
+    real_replace = os.replace
+
+    def fail_manifest_commit(src: object, dst: object) -> None:
+        if str(dst).endswith(".snapshot.json"):
+            raise OSError("simulated crash before snapshot commit")
+        real_replace(src, dst)
+
+    # When both staged data files exist but their manifest cannot commit
+    monkeypatch.setattr(os, "replace", fail_manifest_commit)
+    with pytest.raises(OSError, match="before snapshot commit"):
+        new.save(directory)
+    monkeypatch.setattr(os, "replace", real_replace)
+
+    # Then load keeps the old value; the next save collects the abandoned generation
+    loaded = FaissVectorIndex.load("products", directory)
+    assert [doc for doc, _ in await loaded.search([1.0, 0.0, 0.0, 0.0], k=1)] == ["red"]
+    new.save(directory)
+    assert len(list((directory / "snapshots").glob("*.faiss"))) == 2
+
+
+async def test_partial_state_write_never_becomes_a_committed_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given one complete generation and a writer that crashes after a partial sidecar write
+    directory = tmp_path / "vec"
+    old = _index()
+    await old.insert([_emb("red", [1.0, 0.0, 0.0, 0.0])])
+    old.save(directory)
+    new = _index()
+    await new.insert([_emb("blue", [0.0, 1.0, 0.0, 0.0])])
+    real_write = snapshot_store._write_fsynced
+
+    def partial_write(path: Path, data: bytes) -> None:
+        if path.name.endswith(".state.json.tmp"):
+            path.write_bytes(data[:8])
+            raise OSError("simulated crash during sidecar write")
+        real_write(path, data)
+
+    # When save stops before either staged file is committed
+    monkeypatch.setattr(snapshot_store, "_write_fsynced", partial_write)
+    with pytest.raises(OSError, match="during sidecar write"):
+        new.save(directory)
+
+    # Then only the old complete generation can load
+    loaded = FaissVectorIndex.load("products", directory)
+    assert [doc for doc, _ in await loaded.search([1.0, 0.0, 0.0, 0.0], k=1)] == ["red"]
+
+
+async def test_first_snapshot_fsyncs_each_parent_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a recorder around the real directory durability primitive
+    fsynced: list[Path] = []
+    real_fsync_directory = snapshot_store._fsync_directory
+
+    def record_directory(path: Path) -> None:
+        fsynced.append(path)
+        real_fsync_directory(path)
+
+    monkeypatch.setattr(snapshot_store, "_fsync_directory", record_directory)
+    idx = _index()
+    await idx.insert([_emb("red", [1.0, 0.0, 0.0, 0.0])])
+    directory = tmp_path / "new-parent" / "vec"
+
+    # When the first generation creates its directory and commits its manifest
+    idx.save(directory)
+
+    # Then both new directory entries and the commit record are durably linked
+    assert tmp_path in fsynced
+    assert directory.parent in fsynced
+    assert directory in fsynced
+    assert directory / "snapshots" in fsynced
+
+
+async def test_load_fails_closed_when_no_complete_generation_remains(tmp_path: Path) -> None:
+    # Given the only commit record is corrupt
+    directory = tmp_path / "vec"
+    idx = _index()
+    await idx.insert([_emb("red", [1.0, 0.0, 0.0, 0.0])])
+    idx.save(directory)
+    _snapshot_manifests(directory)[0].write_bytes(b"not-json")
+
+    # When load cannot identify any complete generation
+    with pytest.raises(ValueError, match="no complete vector-index snapshot"):
+        FaissVectorIndex.load("products", directory)
+
+
+async def test_malformed_manifest_filename_cannot_block_the_last_complete_generation(
+    tmp_path: Path,
+) -> None:
+    # Given a complete snapshot plus an attacker/corruption-created pointer filename
+    directory = tmp_path / "vec"
+    idx = _index()
+    await idx.insert([_emb("red", [1.0, 0.0, 0.0, 0.0])])
+    idx.save(directory)
+    (directory / "snapshots" / "not-a-sequence.snapshot.json").write_text("{}")
+
+    # When load enumerates commit records
+    loaded = FaissVectorIndex.load("products", directory)
+
+    # Then malformed names cannot crash sorting or hide the last complete generation
+    assert [doc for doc, _ in await loaded.search([1.0, 0.0, 0.0, 0.0], k=1)] == ["red"]
+
+
+async def test_corrupt_max_sequence_cannot_turn_save_into_a_successful_noop(tmp_path: Path) -> None:
+    directory = tmp_path / "vec"
+    old = _index()
+    await old.insert([_emb("old", [1.0, 0.0, 0.0, 0.0])])
+    old.save(directory)
+    poison = directory / "snapshots" / "99999999999999999999.snapshot.json"
+    poison.write_text("{}")
+    new = _index()
+    await new.insert([_emb("new", [0.0, 1.0, 0.0, 0.0])])
+
+    new.save(directory)
+
+    loaded = FaissVectorIndex.load("products", directory)
+    assert [item for item, _ in await loaded.search([0.0, 1.0, 0.0, 0.0], k=1)] == ["new"]
+    assert all(len(path.name.split(".", 1)[0]) == 20 for path in _snapshot_manifests(directory))
+
+
+def test_valid_max_sequence_fails_closed_before_an_undiscoverable_commit(tmp_path: Path) -> None:
+    store = SnapshotStore(tmp_path / "vec")
+    index = tmp_path / "index.bin"
+    index.write_bytes(b"index")
+    store.commit(lambda path: shutil.copyfile(index, path), b"state")
+    manifest = _snapshot_manifests(tmp_path / "vec")[0]
+    body = json.loads(manifest.read_text())
+    body["sequence"] = 99_999_999_999_999_999_999
+    maximum = manifest.with_name("99999999999999999999.snapshot.json")
+    maximum.write_text(json.dumps(body))
+    manifest.unlink()
+
+    with pytest.raises(SnapshotSequenceError, match="exhausted"):
+        store.commit(lambda path: shutil.copyfile(index, path), b"state")
+    assert _snapshot_manifests(tmp_path / "vec") == [maximum]
+
+
+def test_snapshot_hashing_has_bounded_memory_for_large_files(tmp_path: Path) -> None:
+    large = tmp_path / "large.faiss"
+    with large.open("wb") as handle:
+        handle.truncate(64 * 1024 * 1024)
+    tracemalloc.start()
+    snapshot_store._digest(large)
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    assert peak < 2 * 1024 * 1024
 
 
 async def test_load_rejects_a_dimension_mismatch_against_the_state_sidecar(
@@ -266,10 +796,10 @@ async def test_load_rejects_a_dimension_mismatch_against_the_state_sidecar(
     await idx.insert([_emb("a", [1.0, 0.0, 0.0, 0.0])])
     idx.save(tmp_path / "vec")
 
-    state_path = tmp_path / "vec" / "state.json"
+    state_path = _committed_files(tmp_path / "vec")[1]
     state = json.loads(state_path.read_text())
     state["config"]["dimension"] = 8
-    state_path.write_text(json.dumps(state))
+    _write_committed_state(tmp_path / "vec", state)
 
     with pytest.raises(ValueError, match="dimension does not match"):
         FaissVectorIndex.load("products", tmp_path / "vec")
@@ -285,10 +815,10 @@ async def test_load_rejects_metadata_ids_that_do_not_match_live_state(
     await idx.insert([_emb("a", [1.0, 0.0, 0.0, 0.0])])
     idx.save(tmp_path / "vec")
 
-    state_path = tmp_path / "vec" / "state.json"
+    state_path = _committed_files(tmp_path / "vec")[1]
     state = json.loads(state_path.read_text())
     state["meta"]["ghost"] = {}
-    state_path.write_text(json.dumps(state))
+    _write_committed_state(tmp_path / "vec", state)
 
     with pytest.raises(ValueError, match="metadata IDs"):
         FaissVectorIndex.load("products", tmp_path / "vec")
@@ -462,10 +992,10 @@ async def test_load_refuses_a_persisted_config_it_cannot_honour(tmp_path: Path) 
     await idx.insert([_emb("a", [1.0, 0.0, 0.0, 0.0])])
     idx.save(tmp_path / "vec")
 
-    state_path = tmp_path / "vec" / "state.json"
+    state_path = _committed_files(tmp_path / "vec")[1]
     state = json.loads(state_path.read_text())
     state["config"]["distance_metric"] = "l2"
-    state_path.write_text(json.dumps(state))
+    _write_committed_state(tmp_path / "vec", state)
 
     with pytest.raises(UnsupportedIndexOptionError, match="distance_metric"):
         FaissVectorIndex.load("products", tmp_path / "vec")

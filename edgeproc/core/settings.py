@@ -74,6 +74,9 @@ class EdgeProcSettings(BaseSettings):
     # Cross-process filesystem mutation lock. A wedged peer fails retryably instead of
     # making sync/promote/GC wait forever.
     mutation_lock_timeout: float = 30.0
+    # Cross-process vector snapshot lock. Save/load/migration/GC form one boundary;
+    # a wedged writer fails after this wait instead of blocking an application forever.
+    snapshot_lock_timeout: float = 30.0
     # Per-task resource budgets; the source of truth for the Task model's defaults.
     task_budget_ms: int = 5000
     task_budget_memory_mb: int = 256

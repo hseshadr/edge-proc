@@ -74,13 +74,20 @@ responsibility.
   makes the monotonic check/write indivisible. The default wait is 30 seconds; timeout is a
   typed `IntegrityError` and the caller should retry with jitter.
 - **Local vector state:** `FaissVectorIndex` serializes insert, rebuild, delete, search,
-  statistics, and staged persistence transitions per instance. Its save path validates
-  the index/metadata pair on load and atomically replaces both files. This guard is
-  process-local; applications sharing one index path across processes must provide an
-  external single-writer lock.
+  and statistics per instance. Persistence is also cross-process: save, load, legacy
+  migration, and snapshot GC share one bounded file lock. A save writes generation-addressed
+  FAISS and state files, flushes them, then makes them visible with one atomic manifest commit
+  and durable parent-directory links. Digests stream in fixed-size blocks, so verification
+  does not copy a multi-gigabyte FAISS file into Python memory. Load accepts only a
+  digest-matched complete generation. An instance loaded from disk also compare-and-swaps its
+  selected generation during save: if another process committed first, save raises
+  `SnapshotConflictError`; reload, reapply the intended mutation, and retry. It
+  recovers the previous complete generation when the newest commit is corrupt, retains only
+  those two generations, and migrates a valid 0.4.0 two-file directory on first load.
 - **Resource ceilings:** defaults are a 30-second HTTP client timeout per network
   operation, 256 MiB per response, 64 MiB decompressed per chunk, 4 GiB and 100,000 files
-  per sync, 256 MiB per materialized file, and a 30-second mutation lock wait. Total sync time still scales with the
+  per sync, 256 MiB per materialized file, and 30-second mutation and vector-snapshot lock
+  waits. Total sync time still scales with the
   signed chunk count and origin latency. Operators should lower these limits for smaller
   catalogs and place a host-level deadline around the command when they require one.
 - **Materialization:** CAS activation is atomic; writing a multi-file
@@ -125,19 +132,19 @@ on the consumer's model, hardware, and origin and must be measured in the embedd
 **This table is the single source for EdgeProc's performance figures.** They are stated
 here and nowhere else — no other document restates them, so there is nothing to drift.
 
-Measured 2026-07-20 on a clean build (`rm -rf .venv && uv sync --all-extras`), macOS 26.5
-arm64 (Apple silicon laptop), CPython 3.13.5, commit at the time of measurement:
+Measured 2026-08-13 on macOS 26.5 arm64 (Apple silicon laptop), CPython 3.13.5,
+from the 0.4.1 release candidate after the full local gate:
 
 | metric | p50 | p95 | gate budget |
 |---|---|---|---|
-| vector search | 0.075 ms | 0.097 ms | 100.0 ms |
-| cold sync | 54.181 ms | 82.444 ms | 750.0 ms |
-| warm sync | 16.016 ms | 16.464 ms | 250.0 ms |
+| vector search | 0.065 ms | 0.084 ms | 100.0 ms |
+| cold sync | 51.494 ms | 51.936 ms | 750.0 ms |
+| warm sync | 14.838 ms | 17.226 ms | 250.0 ms |
 
-Peak process RSS was 114.0 MiB against the 512 MiB budget.
+Peak process RSS was 116.75 MiB against the 512 MiB budget.
 
 Read the p95 column as a shape, not a constant. Cold sync is the noisiest metric: two
-consecutive runs on this same machine reported 52.6 ms and 82.4 ms, because seven cold
+consecutive runs on this same machine can vary materially, because seven cold
 syncs give the 95th percentile very few samples and each one is dominated by filesystem
 behavior the library does not control. The table records the slower run deliberately —
 an optimistic number is the more dangerous error. This is also why the drift test in

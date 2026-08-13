@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import hashlib
 import os
+import stat
 from pathlib import Path
 
 import pytest
 import zstandard
 
+from edgeproc.bundles import cas
 from edgeproc.bundles.cas import (
     CacheStore,
     FilesystemCacheStore,
@@ -84,6 +86,72 @@ def test_chunk_round_trip_and_zstd_layout(tmp_path: Path) -> None:
     assert on_disk.is_file()
     # zstd actually compressed: stored bytes are smaller than the plaintext.
     assert on_disk.stat().st_size < len(_COMPRESSIBLE)
+
+
+def test_atomic_write_fsyncs_parent_directory_after_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a recorder that distinguishes file fsyncs from directory fsyncs
+    directory_fsyncs = 0
+    real_fsync = os.fsync
+
+    def record_fsync(fd: int) -> None:
+        nonlocal directory_fsyncs
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            directory_fsyncs += 1
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", record_fsync)
+
+    # When a CAS object becomes visible through an atomic replace
+    _store(tmp_path).put_chunk(b"durable content address")
+
+    # Then its parent directory entry is also made durable
+    assert directory_fsyncs >= 1
+
+
+def test_first_chunk_durably_links_every_new_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "new-parent" / "cache"
+    fsynced: list[Path] = []
+    real_fsync = cas._fsync_directory
+
+    def record(path: Path) -> None:
+        fsynced.append(path)
+        real_fsync(path)
+
+    monkeypatch.setattr(cas, "_fsync_directory", record)
+    store = FilesystemCacheStore(root)
+    digest = store.put_chunk(b"first")
+
+    assert tmp_path in fsynced
+    assert root.parent in fsynced
+    assert root in fsynced
+    assert root / "chunks" in fsynced
+    assert root / "chunks" / digest[:2] in fsynced
+
+
+def test_atomic_write_can_retry_after_replace_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a first attempt that reaches the durable temp file but fails its rename
+    store = _store(tmp_path)
+    real_replace = os.replace
+
+    def fail_replace(_src: object, _dst: object) -> None:
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(os, "replace", fail_replace)
+    with pytest.raises(OSError, match="replace failure"):
+        store.put_chunk(b"retryable payload")
+
+    # When the filesystem is healthy and the same operation retries
+    monkeypatch.setattr(os, "replace", real_replace)
+    digest = store.put_chunk(b"retryable payload")
+
+    # Then no abandoned same-PID temp file wedges the content address
+    assert store.get_chunk(digest) == b"retryable payload"
 
 
 def test_put_chunk_idempotent_and_has_chunk(tmp_path: Path) -> None:

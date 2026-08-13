@@ -25,7 +25,7 @@ take about a minute. The simulated device never downloads it: the model travels 
 the signed bundle. If you want to inspect every command and its output before running it,
 continue to [See it work](#see-it-work).
 
-**Artifact status:** This README documents EdgeProc 0.4.0. The
+**Artifact status:** This README documents EdgeProc 0.4.1. The
 [PyPI project](https://pypi.org/project/edge-proc/) is the source of truth for versions
 available from the registry; the [changelog](CHANGELOG.md) separates shipped behavior
 from unreleased work.
@@ -401,8 +401,8 @@ uv sync --all-extras   # core + extras + dev tooling
 ```
 
 That Just Works — `edgeproc-core` resolves from
-[PyPI](https://pypi.org/project/edgeproc-core/) (`edgeproc-core>=0.2.1`, the first
-release shipping the `edgeproc_core` import package), so `uv sync` fetches
+[PyPI](https://pypi.org/project/edgeproc-core/) (`edgeproc-core>=0.4.2`, the supported
+core line), so `uv sync` fetches
 everything; nothing else to clone. Co-developing `edgeproc-core` alongside
 EdgeProc? Clone it next to this repo and add the path override commented in
 `pyproject.toml`.
@@ -464,6 +464,7 @@ ecosystem-standard `HF_TOKEN`):
 | `default_k` | `EDGEPROC_DEFAULT_K` | `10` | Default top-k results. |
 | `http_timeout` | `EDGEPROC_HTTP_TIMEOUT` | `30.0` | Bundle HTTP fetch timeout (s). |
 | `mutation_lock_timeout` | `EDGEPROC_MUTATION_LOCK_TIMEOUT` | `30.0` | Bounded cross-process publish/sync/promote/GC lock wait (s). |
+| `snapshot_lock_timeout` | `EDGEPROC_SNAPSHOT_LOCK_TIMEOUT` | `30.0` | Bounded cross-process FAISS save/load/migration/GC lock wait (s). |
 | `task_budget_ms` | `EDGEPROC_TASK_BUDGET_MS` | `5000` | Default per-task latency budget. |
 | `task_budget_memory_mb` | `EDGEPROC_TASK_BUDGET_MEMORY_MB` | `256` | Default per-task memory budget. |
 | `max_in_flight_memory_mb` | `EDGEPROC_MAX_IN_FLIGHT_MEMORY_MB` | `512` | Sum of declared task reservations admitted concurrently by one `EdgeProc` instance. |
@@ -475,7 +476,7 @@ ecosystem-standard `HF_TOKEN`):
 | `rrf_k_window` | `EDGEPROC_RRF_K_WINDOW` | `60` | RRF rank-window constant for hybrid fusion. |
 | `trust_root_pubkey_path` | `EDGEPROC_TRUST_ROOT_PUBKEY_PATH` | `None` | Pinned sync trust-root pubkey (no key ⇒ `sync` refused). |
 
-That is the complete set — all 18 fields of `EdgeProcSettings`. A test asserts this table
+That is the complete set — all 19 fields of `EdgeProcSettings`. A test asserts this table
 matches the settings object field-for-field, so a new setting cannot ship undocumented.
 
 One more environment variable exists that is deliberately **not** an `EdgeProcSettings`

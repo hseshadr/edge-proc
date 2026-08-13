@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT_FOR_IMPORT / "benchmarks"))
 from benchmark import BUDGETS  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-RELEASE_VERSION = "0.4.0"
+RELEASE_VERSION = "0.4.1"
 
 
 def _read(relative: str) -> str:
@@ -67,9 +67,41 @@ def test_release_copy_stays_true_before_and_after_registry_propagation() -> None
     readme = _read("README.md")
     workflow = _read(".github/workflows/publish.yml")
 
-    assert "This README documents EdgeProc 0.4.0" in readme
+    assert "This README documents EdgeProc 0.4.1" in readme
     assert "PyPI currently serves" not in readme
     assert "edge-proc is not yet on PyPI" not in workflow
+
+
+def test_corrective_release_marks_the_affected_version_superseded() -> None:
+    changelog = _read("CHANGELOG.md")
+    release_040 = changelog.split("## [0.4.0]", maxsplit=1)[1].split("## [0.3.1]", maxsplit=1)[0]
+    assert "superseded by 0.4.1" in release_040.lower()
+
+
+def test_roadmap_never_lists_the_live_pypi_distribution_as_future_work() -> None:
+    roadmap = _read("ROADMAP.md")
+    near_term = roadmap.split("## Near-term", maxsplit=1)[1].split("## Out of scope", maxsplit=1)[0]
+    assert "## Shipped (v0.4.1)" in roadmap
+    assert "EdgeProc currently installs from source / git" not in roadmap
+    assert "**PyPI distribution**" not in near_term
+
+
+def test_contributor_guide_names_the_real_registry_dependency_source() -> None:
+    guide = _read("CLAUDE.md")
+    assert "`edgeproc-core` resolves from PyPI" in guide
+    assert "resolves from public GitHub via a tag-pinned git source" not in guide
+
+
+def test_core_dependency_floor_excludes_superseded_releases() -> None:
+    assert '"edgeproc-core>=0.4.2"' in _read("pyproject.toml")
+    assert "`edgeproc-core>=0.4.2`" in _read("README.md")
+
+
+def test_operations_contract_explains_the_one_commit_snapshot_boundary() -> None:
+    operations = _read("docs/OPERATIONS.md")
+    assert "generation-addressed" in operations
+    assert "one atomic manifest commit" in operations
+    assert "previous complete generation" in operations
 
 
 def test_budget_copy_distinguishes_admission_from_native_rss_enforcement() -> None:
