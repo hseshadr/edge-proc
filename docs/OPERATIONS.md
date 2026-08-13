@@ -179,6 +179,12 @@ Before building, it verifies the exact tag/version/top-changelog identity; befor
 it verifies both built artifacts' project and version metadata. Record the immutable commit/tag
 and benchmark JSON; do not infer production truth from a different local tree.
 
+Build and validation run in an unprivileged job that records the archive SHA-256 digests and
+uploads one short-lived workflow artifact. The OIDC-bearing job only downloads and re-verifies
+those archives with the runner standard library and coreutils before invoking the official PyPI
+publisher; it does not check out source, install dependencies, or execute the build backend.
+Registry propagation verification runs afterward in a third job without OIDC permission.
+
 The local `poe gate` mirrors only the hosted `CI / gate` job. The separate hosted
 `Secret scan / gitleaks` job is the shared `hseshadr/ci` brick called from `ci.yml`; it scans
 the commit range of each push or PR, not the whole repository. The tag workflow independently

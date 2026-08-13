@@ -358,3 +358,13 @@ def test_release_runbook_says_the_tag_workflow_rechecks_eligibility() -> None:
     assert "exact current `main` commit" in release
     assert "green hosted `gate`, `Secret scan / gitleaks`, and `pip-audit`" in release
     assert "full Git history" in release
+
+
+def test_release_runbook_keeps_build_code_outside_the_oidc_job() -> None:
+    """Trusted-publish credentials must not be exposed to a package build backend."""
+    release = " ".join(
+        _read("docs/OPERATIONS.md").split("## Release evidence", maxsplit=1)[1].split()
+    )
+
+    assert "Build and validation run in an unprivileged job" in release
+    assert "OIDC-bearing job only downloads and re-verifies" in release

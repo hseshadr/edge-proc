@@ -40,6 +40,10 @@ This corrective release supersedes 0.4.0 for applications that persist a
 - Publishing verifies and repairs reused chunk objects before advancing `latest`. A corrupt
   producer-side CAS object or flat-origin hardlink is atomically replaced from the current
   source bytes, so a successful re-publish remains syncable by a fresh device.
+- Trusted publishing now builds, tests, audits, and validates archives without OIDC permission.
+  The credentialed job only downloads the short-lived artifact, rechecks its SHA-256 digests
+  and metadata without executing package code, and invokes the official PyPI publisher;
+  registry propagation verification runs afterward without OIDC.
 - The source distribution now includes the benchmarks, operational docs, workflow fixtures,
   mutation harness, environment example, citation, roadmap, contributor guide, and lockfile
   required by its shipped test suite. Its contract tests run from the extracted archive.

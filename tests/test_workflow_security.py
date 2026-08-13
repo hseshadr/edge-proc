@@ -4,6 +4,7 @@ Both are asserted against this repo's real ``.github/workflows``, and both are p
 falsifiable against synthetic fixtures — a guard nobody has watched fail is not a guard.
 """
 
+import hashlib
 import io
 import os
 import re
@@ -22,6 +23,8 @@ WORKFLOWS = ROOT / ".github/workflows"
 USES = re.compile(r"^\s*(?:-\s*)?uses:\s*([^\s#]+)", re.MULTILINE)
 PINNED = re.compile(r"^[\w.-]+/[\w.-]+(?:/[\w./-]+)?@[0-9a-f]{40}$")
 PYPI_PUBLISH = "pypa/gh-action-pypi-publish"
+UPLOAD_ARTIFACT = "actions/upload-artifact"
+DOWNLOAD_ARTIFACT = "actions/download-artifact"
 NO_ATTESTATIONS = "publish step does not set `with: attestations: true` (PEP 740)"
 NO_OIDC = "publish job does not grant `permissions: id-token: write`"
 PUBLISH_WORKFLOW = WORKFLOWS / "publish.yml"
@@ -39,6 +42,8 @@ RELEASE_SCAN_STEP = "Scan release history and tree for secrets"
 SOURCE_IDENTITY_STEP = "Verify source release identity"
 HOSTED_ELIGIBILITY_STEP = "Verify exact main and hosted checks"
 BUILT_METADATA_STEP = "Verify built distribution metadata"
+DOWNLOADED_ARTIFACT_STEP = "Verify downloaded release artifact"
+REGISTRY_VERIFY_STEP = "Verify the release is actually on PyPI"
 
 
 def _workflow_files(directory: Path) -> list[Path]:
@@ -123,6 +128,11 @@ def _action(step: Mapping[str, object]) -> str:
     """The action a step runs, minus its ``@ref``. Empty for a plain ``run:`` step."""
     uses = step.get("uses")
     return uses.split("@")[0] if isinstance(uses, str) else ""
+
+
+def _step_names(job: Mapping[str, object]) -> set[str]:
+    """Every explicit step name in one workflow job."""
+    return {str(step["name"]) for step in _steps(job) if "name" in step}
 
 
 def _enabled(value: object) -> bool:
@@ -379,6 +389,15 @@ def _write_distributions(directory: Path, name: str, version: str) -> None:
     _write_sdist(directory, name, version)
 
 
+def _write_digest_manifest(directory: Path) -> None:
+    """Record the two release archive digests in coreutils check format."""
+    archives = sorted((directory / "dist").iterdir())
+    lines = [
+        f"{hashlib.sha256(path.read_bytes()).hexdigest()}  dist/{path.name}" for path in archives
+    ]
+    (directory / "SHA256SUMS").write_text("\n".join(lines) + "\n")
+
+
 def _validator(job: str, step: str) -> str:
     """One named validator from the real release workflow."""
     return _named_run(_job(_workflow_document(), job), step)
@@ -436,7 +455,7 @@ def test_built_metadata_validator_accepts_matching_artifacts(tmp_path: Path) -> 
     """Both distribution formats identify the tagged project and version."""
     _write_release_source(tmp_path, "0.4.1", "## [0.4.1]\n")
     _write_distributions(tmp_path, "edge-proc", "0.4.1")
-    script = _validator("publish", BUILT_METADATA_STEP)
+    script = _validator("release-eligibility", BUILT_METADATA_STEP)
 
     assert script, "release workflow has no built-metadata validator"
     result = _run_validator(script, tmp_path, "v0.4.1")
@@ -448,7 +467,7 @@ def test_built_metadata_validator_rejects_the_wrong_project(tmp_path: Path) -> N
     """An artifact for another project can never reach the trusted upload action."""
     _write_release_source(tmp_path, "0.4.1", "## [0.4.1]\n")
     _write_distributions(tmp_path, "edgeproc-impostor", "0.4.1")
-    script = _validator("publish", BUILT_METADATA_STEP)
+    script = _validator("release-eligibility", BUILT_METADATA_STEP)
 
     assert script, "release workflow has no built-metadata validator"
     result = _run_validator(script, tmp_path, "v0.4.1")
@@ -461,7 +480,7 @@ def test_built_metadata_validator_rejects_the_wrong_version(tmp_path: Path) -> N
     """A backend metadata drift cannot upload artifacts under the wrong version."""
     _write_release_source(tmp_path, "0.4.1", "## [0.4.1]\n")
     _write_distributions(tmp_path, "edge-proc", "0.4.0")
-    script = _validator("publish", BUILT_METADATA_STEP)
+    script = _validator("release-eligibility", BUILT_METADATA_STEP)
 
     assert script, "release workflow has no built-metadata validator"
     result = _run_validator(script, tmp_path, "v0.4.1")
@@ -471,14 +490,80 @@ def test_built_metadata_validator_rejects_the_wrong_version(tmp_path: Path) -> N
 
 
 def test_built_metadata_validation_precedes_the_oidc_upload() -> None:
-    """The first external side effect is unreachable until artifact identity passes."""
+    """The credentialed job consumes only eligibility-validated release artifacts."""
+    eligible = _job(_workflow_document(), "release-eligibility")
     publish = _job(_workflow_document(), "publish")
     steps = _steps(publish)
     metadata = next(
-        (index for index, step in enumerate(steps) if step.get("name") == BUILT_METADATA_STEP),
+        (index for index, step in enumerate(steps) if step.get("name") == DOWNLOADED_ARTIFACT_STEP),
         -1,
     )
     upload = next((index for index, step in enumerate(steps) if _action(step) == PYPI_PUBLISH), -1)
 
+    assert BUILT_METADATA_STEP in _step_names(eligible)
+    assert _needs(publish) == {"release-eligibility"}
     assert metadata >= 0
     assert upload > metadata
+
+
+def _assert_minimal_oidc_job(publish: Mapping[str, object]) -> None:
+    actions = {_action(step) for step in _steps(publish)} - {""}
+    assert {DOWNLOAD_ARTIFACT, PYPI_PUBLISH} == actions
+    assert _step_names(publish) == {
+        "Download verified release artifact",
+        DOWNLOADED_ARTIFACT_STEP,
+        "Publish to PyPI (OIDC Trusted Publishing)",
+    }
+
+
+def test_oidc_job_cannot_checkout_install_build_or_verify_the_registry() -> None:
+    """Only immutable-artifact verification and official upload run with PyPI OIDC."""
+    document = _workflow_document()
+    eligible = _job(document, "release-eligibility")
+    verify = _job(document, "verify-published")
+    _assert_minimal_oidc_job(_job(document, "publish"))
+    assert {UPLOAD_ARTIFACT} <= {_action(step) for step in _steps(eligible)}
+    assert {"Build sdist + wheel", BUILT_METADATA_STEP} <= _step_names(eligible)
+    assert REGISTRY_VERIFY_STEP in _step_names(verify)
+    assert _needs(verify) == {"publish"}
+    assert all(
+        _mapping(job.get("permissions")).get("id-token") != "write" for job in (eligible, verify)
+    )
+
+
+def test_downloaded_artifact_validator_accepts_unchanged_archives(tmp_path: Path) -> None:
+    """The OIDC job independently verifies digest, project, and tagged version."""
+    release = tmp_path / "release"
+    release.mkdir()
+    _write_distributions(release, "edge-proc", "0.4.1")
+    _write_digest_manifest(release)
+
+    result = _run_validator(_validator("publish", DOWNLOADED_ARTIFACT_STEP), tmp_path, "v0.4.1")
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_downloaded_artifact_validator_rejects_transit_mutation(tmp_path: Path) -> None:
+    """Artifact-service or handoff corruption cannot reach the official upload action."""
+    release = tmp_path / "release"
+    release.mkdir()
+    _write_distributions(release, "edge-proc", "0.4.1")
+    _write_digest_manifest(release)
+    wheel = next((release / "dist").glob("*.whl"))
+    wheel.write_bytes(wheel.read_bytes() + b"changed after eligibility")
+
+    result = _run_validator(_validator("publish", DOWNLOADED_ARTIFACT_STEP), tmp_path, "v0.4.1")
+
+    assert result.returncode != 0
+
+
+def test_checksum_manifest_is_not_in_the_pypi_packages_directory() -> None:
+    """The official publisher receives distributions only, never the handoff manifest."""
+    document = _workflow_document()
+    eligible = _job(document, "release-eligibility")
+    publish = _job(document, "publish")
+    record = _named_run(eligible, "Record release artifact digests")
+    upload = next(step for step in _steps(publish) if _action(step) == PYPI_PUBLISH)
+
+    assert "> SHA256SUMS" in record
+    assert _mapping(upload.get("with")).get("packages-dir") == "release/dist"
