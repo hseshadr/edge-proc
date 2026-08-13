@@ -124,6 +124,22 @@ def test_origin_copy_fallback_fsyncs_each_destination(
     assert set(synced_files) == set((origin / "chunk").iterdir())
 
 
+@pytest.mark.parametrize("directory_name", ["chunk", "manifest"])
+def test_publish_refuses_symlinked_flat_origin_directories(
+    tmp_path: Path, directory_name: str
+) -> None:
+    origin = tmp_path / "origin"
+    outside = tmp_path / "outside"
+    origin.mkdir()
+    outside.mkdir()
+    (origin / directory_name).symlink_to(outside, target_is_directory=True)
+    private, _ = generate_keypair()
+
+    with pytest.raises(ValueError, match="origin directory"):
+        _publish(origin, Ed25519Signer(private), _FILES, "1.0.0")
+    assert list(outside.iterdir()) == []
+
+
 def test_republish_unchanged_catalog_touches_zero_chunk_files(tmp_path: Path) -> None:
     """A second ``build_bundle`` over the same files mustn't rewrite existing chunks."""
     private, _public = generate_keypair()

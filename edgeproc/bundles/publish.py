@@ -151,6 +151,8 @@ def _lay_out_origin(
     root = store.root
     (root / "chunk").mkdir(parents=True, exist_ok=True)
     (root / "manifest").mkdir(parents=True, exist_ok=True)
+    _require_flat_directory(root / "chunk")
+    _require_flat_directory(root / "manifest")
     store.write_atomic(f"manifest/{pointer.manifest_hash}", canonical_bytes(manifest))
     wanted = {ref.hash for entry in manifest.files for ref in entry.chunks}
     for chunk_hash in wanted:
@@ -188,3 +190,8 @@ def _fsync_directory(path: Path) -> None:
         os.fsync(fd)
     finally:
         os.close(fd)
+
+
+def _require_flat_directory(path: Path) -> None:
+    if path.is_symlink() or not path.is_dir():
+        raise ValueError("flat origin directory must be a real directory, not a symlink")

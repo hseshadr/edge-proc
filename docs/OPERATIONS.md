@@ -67,7 +67,8 @@ responsibility.
 
 - **Crash-atomic activation:** the active pointer is a same-filesystem, fsynced atomic
   replace. Publisher `latest` and manifest artifacts use the same primitive. A reader
-  observes the old pointer or the new pointer, never a torn pointer.
+  observes the old pointer or the new pointer, never a torn pointer. The flat published
+  `chunk/` and `manifest/` directories must be real directories; symlinks are refused.
 - **Fail-closed retry:** signature, hash, path, size, rollback, fetch, or lock failures do
   not promote the candidate. Verified inactive chunks may remain and are safely reused.
 - **Concurrent mutation:** one cross-process lock covers fetch/verify/promote versus GC and
