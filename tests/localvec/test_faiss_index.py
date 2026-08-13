@@ -1056,6 +1056,25 @@ async def test_load_refuses_a_persisted_config_it_cannot_honour(tmp_path: Path) 
         FaissVectorIndex.load("products", tmp_path / "vec")
 
 
+async def test_load_supports_a_read_only_saved_index(tmp_path: Path) -> None:
+    directory = tmp_path / "vec"
+    idx = _index()
+    await idx.insert([_emb("a", [1.0, 0.0, 0.0, 0.0])])
+    idx.save(directory)
+    paths = [directory, *directory.rglob("*")]
+    try:
+        for path in paths:
+            path.chmod(0o555 if path.is_dir() else 0o444)
+
+        loaded = FaissVectorIndex.load("products", directory)
+        assert await loaded.search([1.0, 0.0, 0.0, 0.0], k=1) == [
+            ("a", pytest.approx(0.0, abs=1e-6))
+        ]
+    finally:
+        for path in paths:
+            path.chmod(0o755 if path.is_dir() else 0o644)
+
+
 def test_refusal_carries_the_canonical_config_invalid_code() -> None:
     """The refusal is coded, not just typed — it renders to RFC 9457 like every other."""
     error = UnsupportedIndexOptionError("ef_search tunes a graph this index does not have")

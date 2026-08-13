@@ -123,6 +123,10 @@ def test_corrective_release_names_every_symlink_containment_fix() -> None:
     release = " ".join(section.split())
     assert "garbage collection refuses symlinked chunk shards and object leaves" in release
     assert "The publisher refuses symlinks under `--src`" in release
+    assert "Read-only saved indexes load without writing their snapshot directory" in release
+    assert (
+        "Publishing verifies and repairs reused chunk objects before advancing `latest`" in release
+    )
 
 
 def test_operations_contract_explains_the_one_commit_snapshot_boundary() -> None:

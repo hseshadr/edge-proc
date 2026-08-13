@@ -224,11 +224,17 @@ class FilesystemCacheStore:
     def put_chunk(self, plaintext: bytes) -> str:
         chunk_hash = _sha256(plaintext)
         path = self._chunk_path(chunk_hash)
-        if path.is_file():
-            return chunk_hash  # idempotent: content-addressed, never rewritten
+        if path.is_file() and self._chunk_matches(chunk_hash, plaintext):
+            return chunk_hash
         _durable_mkdir(path.parent)
         _atomic_write(path, zstandard.compress(plaintext))
         return chunk_hash
+
+    def _chunk_matches(self, chunk_hash: str, plaintext: bytes) -> bool:
+        try:
+            return self.get_chunk(chunk_hash) == plaintext
+        except IntegrityError:
+            return False
 
     def put_chunk_compressed(self, chunk_hash: str, compressed: bytes) -> None:
         """Store the producer's verbatim zstd bytes, then verify fail-closed.

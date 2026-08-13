@@ -327,8 +327,12 @@ def _route_runtime(
     encoder = _build_encoder_or_fail(model, model_path)
     try:
         return load_local_runtime(index_dir, encoder=encoder, index_name=index_name)
-    except (FileNotFoundError, ValueError) as exc:
-        _fail(f"could not load index from {index_dir}: {exc}")
+    except (OSError, ValueError) as exc:
+        _fail(
+            f"could not load index from {index_dir}: {exc}",
+            CONFIG_INVALID,
+            field="--index-dir",
+        )
 
 
 def _build_encoder_or_fail(model: str | None, model_path: Path | None) -> Encoder:

@@ -155,14 +155,26 @@ def _lay_out_origin(
     _require_flat_directory(root / "manifest")
     store.write_atomic(f"manifest/{pointer.manifest_hash}", canonical_bytes(manifest))
     wanted = {ref.hash for entry in manifest.files for ref in entry.chunks}
-    for chunk_hash in wanted:
-        dst = root / "chunk" / chunk_hash
-        _require_regular_leaf(dst, "published chunk")
-        if dst.exists():
-            continue
-        _link_or_copy(_store_chunk_path(store, chunk_hash), dst)
+    _publish_chunks(store, wanted)
     _fsync_directory(root / "chunk")
     store.write_atomic("latest", pointer.model_dump_json().encode("utf-8"))
+
+
+def _publish_chunks(store: FilesystemCacheStore, chunk_hashes: set[str]) -> None:
+    for chunk_hash in chunk_hashes:
+        _publish_chunk(store, chunk_hash)
+
+
+def _publish_chunk(store: FilesystemCacheStore, chunk_hash: str) -> None:
+    src = _store_chunk_path(store, chunk_hash)
+    dst = store.root / "chunk" / chunk_hash
+    _require_regular_leaf(dst, "published chunk")
+    if not dst.exists():
+        _link_or_copy(src, dst)
+        return
+    source_bytes = src.read_bytes()
+    if dst.read_bytes() != source_bytes:
+        store.write_atomic(f"chunk/{chunk_hash}", source_bytes)
 
 
 def _store_chunk_path(store: FilesystemCacheStore, chunk_hash: str) -> Path:

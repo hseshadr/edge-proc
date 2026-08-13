@@ -6,7 +6,9 @@ import asyncio
 import importlib
 import json
 import os
+import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 from edgeproc_core.vector_mgmt.core.types import IndexConfig, VectorEmbedding
@@ -332,6 +334,30 @@ def test_route_missing_index_dir_fails_closed(
 
     assert result.exit_code == 1
     assert '"success"' not in result.stdout
+
+
+def test_route_maps_an_unreadable_index_to_a_coded_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loader = ModuleType("edgeproc.localvec.loader")
+
+    def unreadable(*_args: object, **_kwargs: object) -> object:
+        raise PermissionError("read-only index")
+
+    loader.__dict__["load_local_runtime"] = unreadable
+    monkeypatch.setitem(sys.modules, "edgeproc.localvec.loader", loader)
+    monkeypatch.setattr(_cli_app_module, "build_encoder", lambda _model, _path=None: FakeEncoder())
+    task = tmp_path / "task.json"
+    _write_task(task)
+
+    result = runner.invoke(
+        app, ["route", "--index-dir", str(tmp_path / "idx"), "--task", str(task)]
+    )
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.stderr
+    assert "[config.invalid]" in result.stderr
+    assert "read-only index" in result.stderr
 
 
 def test_route_without_a_local_model_refuses_as_coded_config_error(

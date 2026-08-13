@@ -15,7 +15,7 @@ strategies.
 from __future__ import annotations
 
 import asyncio
-from contextlib import AbstractContextManager
+import errno
 from pathlib import Path
 from threading import RLock
 from typing import ClassVar, Final
@@ -30,7 +30,7 @@ from edgeproc_core.vector_mgmt.core.types import (
     Scalar,
     VectorEmbedding,
 )
-from filelock import FileLock
+from filelock import BaseFileLock, FileLock
 from numpy.typing import NDArray
 from pydantic import BaseModel
 
@@ -131,13 +131,13 @@ class FaissVectorIndex:
     @classmethod
     def load(cls, index_name: str, directory: Path) -> FaissVectorIndex:
         """Reload an index previously written by :meth:`save`."""
-        with _persistence_lock(directory):
-            faiss_index, state, revision = _load_persisted(directory)
-            _validate_persisted_index(faiss_index, state)
-            instance = cls(index_name, state.config)
-            instance._restore(faiss_index, state)
-            instance._snapshot_revision = revision
-            return instance
+        lock = _persistence_lock(directory)
+        acquired = _acquire_load_lock(lock)
+        try:
+            return _restore_persisted(index_name, directory)
+        finally:
+            if acquired:
+                lock.release()
 
     def _restore(self, faiss_index: faiss.Index, state: _PersistedState) -> None:
         self._faiss = faiss_index
@@ -333,9 +333,29 @@ def _passes(meta: Metadata, filters: Metadata | None) -> bool:
     return all(meta.get(key) == value for key, value in filters.items())
 
 
-def _persistence_lock(directory: Path) -> AbstractContextManager[object]:
+def _persistence_lock(directory: Path) -> BaseFileLock:
     timeout = EdgeProcSettings().snapshot_lock_timeout
     return FileLock(directory / ".snapshot.lock", timeout=timeout)
+
+
+def _acquire_load_lock(lock: BaseFileLock) -> bool:
+    """Acquire when writable; immutable mounts safely read committed generations unlocked."""
+    try:
+        lock.acquire()
+    except OSError as exc:
+        if exc.errno not in {errno.EACCES, errno.EPERM, errno.EROFS}:
+            raise
+        return False
+    return True
+
+
+def _restore_persisted(index_name: str, directory: Path) -> FaissVectorIndex:
+    faiss_index, state, revision = _load_persisted(directory)
+    _validate_persisted_index(faiss_index, state)
+    instance = FaissVectorIndex(index_name, state.config)
+    instance._restore(faiss_index, state)
+    instance._snapshot_revision = revision
+    return instance
 
 
 def _load_persisted(

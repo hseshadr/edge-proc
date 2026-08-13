@@ -31,6 +31,12 @@ This corrective release supersedes 0.4.0 for applications that persist a
   CAS garbage collection refuses symlinked chunk shards and object leaves before sweeping,
   so cleanup cannot unlink a file outside its cache. The publisher refuses symlinks under
   `--src`, so a source-tree alias cannot pull an external file into a signed release.
+- Read-only saved indexes load without writing their snapshot directory. Writable loads
+  retain the cross-process snapshot lock; immutable mounts read only generation-addressed,
+  digest-verified commits. CLI permission failures now render a coded refusal.
+- Publishing verifies and repairs reused chunk objects before advancing `latest`. A corrupt
+  producer-side CAS object or flat-origin hardlink is atomically replaced from the current
+  source bytes, so a successful re-publish remains syncable by a fresh device.
 - The source distribution now includes the benchmarks, operational docs, workflow fixtures,
   mutation harness, environment example, citation, roadmap, contributor guide, and lockfile
   required by its shipped test suite. Its contract tests run from the extracted archive.

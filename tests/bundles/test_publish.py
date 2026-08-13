@@ -179,6 +179,24 @@ def test_republish_unchanged_catalog_touches_zero_chunk_files(tmp_path: Path) ->
     assert pre == post
 
 
+def test_republish_repairs_a_corrupted_existing_chunk_before_latest(tmp_path: Path) -> None:
+    private, public = generate_keypair()
+    origin = tmp_path / "origin"
+    signer = Ed25519Signer(private)
+    _publish(origin, signer, _FILES, "1.0.0")
+    published_chunk = next((origin / "chunk").iterdir())
+    published_chunk.write_bytes(b"not zstd")
+
+    pointer = _publish(origin, signer, _FILES, "1.0.1")
+
+    verifier = Ed25519Verifier.from_public_bytes(public.public_bytes_raw())
+    fresh = FilesystemCacheStore(tmp_path / "fresh")
+    sync_index(base_url=str(origin), store=fresh, adapter=_fs_adapter(), verifier=verifier)
+    manifest = _manifest_at(origin, pointer)
+    for path, original in _FILES.items():
+        assert materialize_file(fresh, manifest, path) == original
+
+
 def test_publish_crash_keeps_previous_latest(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
