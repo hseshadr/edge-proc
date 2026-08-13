@@ -312,7 +312,7 @@ chunks
 manifests
 ```
 
-Compare that to the healthy `cache/`, which has an `active` directory. `cache3/` never got one:
+Compare that to the healthy `cache/`, which has an `active` pointer file. `cache3/` never got one:
 the bad version was never promoted, and a device in this state keeps serving the last good
 version instead of silently serving corrupted data.
 

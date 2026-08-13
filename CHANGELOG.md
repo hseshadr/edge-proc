@@ -26,6 +26,8 @@ This corrective release supersedes 0.4.0 for applications that persist a
 - Published-origin chunk links are flushed before the durable `latest` pointer; copy fallback
   also flushes each destination file so `latest` cannot outlive the objects it references.
   Symlinked flat-origin chunk or manifest directories are refused before publication.
+- Snapshot, CAS, pointer, and flat-origin object leaves now refuse symlinks even when the
+  target stays inside the selected root; no trusted pointer advances over an aliased object.
 - The source distribution now includes the benchmarks, operational docs, workflow fixtures,
   mutation harness, environment example, citation, roadmap, contributor guide, and lockfile
   required by its shipped test suite. Its contract tests run from the extracted archive.

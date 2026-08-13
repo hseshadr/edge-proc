@@ -111,6 +111,14 @@ def test_runnable_docs_never_edit_the_retired_legacy_snapshot_sidecar(document: 
     assert "src/catalog_idx/snapshots/" in copy
 
 
+@pytest.mark.parametrize("document", ["README.md", "docs/QUICKSTART.md"])
+def test_cache_docs_describe_active_as_a_pointer_file(document: str) -> None:
+    copy = _read(document)
+    assert "`active` pointer file" in copy
+    assert "`active` directory" not in copy
+    assert "`active/` directory" not in copy
+
+
 def test_budget_copy_distinguishes_admission_from_native_rss_enforcement() -> None:
     readme = _read("README.md")
     assert "MemoryManager" in readme

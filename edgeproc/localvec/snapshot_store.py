@@ -127,10 +127,13 @@ class SnapshotStore:
         raise ValueError("no complete vector-index snapshot could be recovered") from failures[0]
 
     def _payload(self, manifest_path: Path) -> SnapshotPayload:
+        _require_regular_leaf(manifest_path, "snapshot manifest")
         manifest = SnapshotManifest.model_validate_json(manifest_path.read_bytes())
         if manifest.sequence != _manifest_sequence(manifest_path):
             raise ValueError("snapshot manifest sequence does not match its filename")
         paths = self._generation_paths(manifest.generation)
+        _require_regular_leaf(paths.index_final, "FAISS index")
+        _require_regular_leaf(paths.state_final, "state sidecar")
         _verify_digest(paths.index_final, manifest.index_sha256, "FAISS index")
         _verify_digest(paths.state_final, manifest.state_sha256, "state sidecar")
         revision = SnapshotRevision(manifest.sequence, manifest.generation)
@@ -309,3 +312,8 @@ def _durable_mkdir(path: Path) -> None:
 def _require_real_directory(path: Path, label: str) -> None:
     if path.is_symlink() or not path.is_dir():
         raise ValueError(f"{label} must be a real directory, not a symlink or non-directory")
+
+
+def _require_regular_leaf(path: Path, label: str) -> None:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"{label} must be a regular file, not a symlink or non-file")

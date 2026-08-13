@@ -69,6 +69,7 @@ responsibility.
   replace. Publisher `latest` and manifest artifacts use the same primitive. A reader
   observes the old pointer or the new pointer, never a torn pointer. The flat published
   `chunk/` and `manifest/` directories must be real directories; symlinks are refused.
+  Object and pointer leaves are held to the same rule, including same-root symlinks.
 - **Fail-closed retry:** signature, hash, path, size, rollback, fetch, or lock failures do
   not promote the candidate. Verified inactive chunks may remain and are safely reused.
 - **Concurrent mutation:** one cross-process lock covers fetch/verify/promote versus GC and
@@ -88,6 +89,7 @@ responsibility.
   post-commit cleanup failure emits a warning log but does not misreport the already-active
   save as failed; the next save retries cleanup. Snapshot roots and internal directories must
   be real directories—symlinks and non-directories are refused before any snapshot write.
+  Committed manifest, FAISS, and state leaves must be regular files; symlinks are never read.
 - **Resource ceilings:** defaults are a 30-second HTTP client timeout per network
   operation, 256 MiB per response, 64 MiB decompressed per chunk, 4 GiB and 100,000 files
   per sync, 256 MiB per materialized file, and 30-second mutation and vector-snapshot lock

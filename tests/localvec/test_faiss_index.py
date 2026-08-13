@@ -694,6 +694,24 @@ async def test_save_refuses_a_symlinked_snapshot_directory(tmp_path: Path) -> No
     assert list(outside.iterdir()) == []
 
 
+@pytest.mark.parametrize("leaf", ["manifest", "index", "state"])
+async def test_load_refuses_symlinked_snapshot_leaves(tmp_path: Path, leaf: str) -> None:
+    directory = tmp_path / "vec"
+    idx = _index()
+    await idx.insert([_emb("red", [1.0, 0.0, 0.0, 0.0])])
+    idx.save(directory)
+    manifest_path = _snapshot_manifests(directory)[0]
+    data_paths = {"index": _committed_files(directory)[0], "state": _committed_files(directory)[1]}
+    target = manifest_path if leaf == "manifest" else data_paths[leaf]
+    outside = tmp_path / target.name
+    outside.write_bytes(target.read_bytes())
+    target.unlink()
+    target.symlink_to(outside)
+
+    with pytest.raises(ValueError, match="no complete vector-index snapshot"):
+        FaissVectorIndex.load("products", directory)
+
+
 async def test_partial_state_write_never_becomes_a_committed_snapshot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

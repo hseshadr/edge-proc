@@ -157,6 +157,7 @@ def _lay_out_origin(
     wanted = {ref.hash for entry in manifest.files for ref in entry.chunks}
     for chunk_hash in wanted:
         dst = root / "chunk" / chunk_hash
+        _require_regular_leaf(dst, "published chunk")
         if dst.exists():
             continue
         _link_or_copy(_store_chunk_path(store, chunk_hash), dst)
@@ -195,3 +196,8 @@ def _fsync_directory(path: Path) -> None:
 def _require_flat_directory(path: Path) -> None:
     if path.is_symlink() or not path.is_dir():
         raise ValueError("flat origin directory must be a real directory, not a symlink")
+
+
+def _require_regular_leaf(path: Path, label: str) -> None:
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ValueError(f"{label} must be a regular file, not a symlink or non-file")

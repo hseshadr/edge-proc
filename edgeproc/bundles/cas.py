@@ -114,6 +114,7 @@ def _open_exclusive_temp(path: Path) -> int:
 
 def _atomic_write(target: Path, data: bytes) -> None:
     """Write ``data`` to ``target`` atomically via a fsynced same-dir temp + replace."""
+    _refuse_symlink(target)
     tmp = target.with_name(f"{target.name}.tmp.{os.getpid()}")
     fd = _open_exclusive_temp(tmp)
     try:
@@ -135,6 +136,18 @@ def _fsync_directory(path: Path) -> None:
         os.fsync(fd)
     finally:
         os.close(fd)
+
+
+def _refuse_symlink(path: Path) -> None:
+    if path.is_symlink():
+        raise IntegrityError(f"refusing symlinked persistence leaf: {path.name}")
+
+
+def _refuse_symlink_components(root: Path, relpath: str) -> None:
+    candidate = root / relpath
+    while candidate != root:
+        _refuse_symlink(candidate)
+        candidate = candidate.parent
 
 
 def _durable_mkdir(path: Path) -> None:
@@ -186,6 +199,7 @@ class FilesystemCacheStore:
 
     def _store_path(self, relpath: str) -> Path:
         try:
+            _refuse_symlink_components(self._root, relpath)
             return resolve_within(self._root, relpath)
         except UnsafePathError as exc:
             raise IntegrityError(str(exc)) from exc
@@ -203,7 +217,9 @@ class FilesystemCacheStore:
         return self._store_path(f"manifests/{digest}")
 
     def has_chunk(self, chunk_hash: str) -> bool:
-        return self._chunk_path(chunk_hash).is_file()
+        path = self._chunk_path(chunk_hash)
+        _refuse_symlink(path)
+        return path.is_file()
 
     def put_chunk(self, plaintext: bytes) -> str:
         chunk_hash = _sha256(plaintext)
@@ -228,6 +244,7 @@ class FilesystemCacheStore:
         self._verify_or_remove(path, chunk_hash)
 
     def _verify_or_remove(self, path: Path, chunk_hash: str) -> None:
+        _refuse_symlink(path)
         try:
             plaintext = _decompress(path.read_bytes(), self._max_decompressed_bytes)
             if _sha256(plaintext) != chunk_hash:
@@ -237,9 +254,9 @@ class FilesystemCacheStore:
             raise
 
     def get_chunk(self, chunk_hash: str) -> bytes:
-        plaintext = _decompress(
-            self._chunk_path(chunk_hash).read_bytes(), self._max_decompressed_bytes
-        )
+        path = self._chunk_path(chunk_hash)
+        _refuse_symlink(path)
+        plaintext = _decompress(path.read_bytes(), self._max_decompressed_bytes)
         if _sha256(plaintext) != chunk_hash:
             raise IntegrityError(f"chunk {chunk_hash} failed content-address check")
         return plaintext
@@ -256,7 +273,9 @@ class FilesystemCacheStore:
         _atomic_write(target, data)
 
     def get_manifest(self, manifest_hash: str) -> bytes:
-        raw = self._manifest_path(manifest_hash).read_bytes()
+        path = self._manifest_path(manifest_hash)
+        _refuse_symlink(path)
+        raw = path.read_bytes()
         if _sha256(raw) != manifest_hash:
             raise IntegrityError(f"manifest {manifest_hash} failed content-address check")
         return raw
@@ -348,8 +367,9 @@ def _parse_active(active: Path) -> VersionPointer:
     escaping the trust boundary.
     """
     try:
+        _refuse_symlink(active)
         return VersionPointer.model_validate_json(active.read_bytes())
-    except (OSError, ValidationError) as exc:
+    except (IntegrityError, OSError, ValidationError) as exc:
         raise IntegrityError("active pointer exists but could not be read") from exc
 
 

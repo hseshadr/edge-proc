@@ -166,6 +166,38 @@ def test_put_chunk_idempotent_and_has_chunk(tmp_path: Path) -> None:
     assert store.put_chunk(data) == first
 
 
+def test_cas_refuses_same_root_symlinked_object_leaves(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    manifest = b'{"safe":true}'
+    digest = hashlib.sha256(manifest).hexdigest()
+    victim = tmp_path / "victim"
+    victim.write_bytes(b"unchanged")
+    (tmp_path / "manifests" / digest).symlink_to(victim)
+
+    with pytest.raises(IntegrityError, match="symlink"):
+        store.put_manifest(manifest)
+    assert victim.read_bytes() == b"unchanged"
+
+
+def test_cas_refuses_symlinked_chunk_and_active_leaves(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    data = b"same-root leaf"
+    digest = store.put_chunk(data)
+    chunk = tmp_path / "chunks" / digest[:2] / digest
+    victim = tmp_path / "victim"
+    victim.write_bytes(chunk.read_bytes())
+    chunk.unlink()
+    chunk.symlink_to(victim)
+    with pytest.raises(IntegrityError, match="symlink"):
+        store.get_chunk(digest)
+
+    active_victim = tmp_path / "active-victim"
+    active_victim.write_text("{}")
+    (tmp_path / "active").symlink_to(active_victim)
+    with pytest.raises(IntegrityError, match="symlink"):
+        store.read_active()
+
+
 def test_get_chunk_fail_closed_on_corruption(tmp_path: Path) -> None:
     store = _store(tmp_path)
     chunk_hash = store.put_chunk(_COMPRESSIBLE)
@@ -266,7 +298,7 @@ def test_store_rejects_symlinked_cas_directory(tmp_path: Path, directory: str) -
     (root / directory).symlink_to(outside, target_is_directory=True)
 
     # When / Then
-    with pytest.raises(IntegrityError, match="escapes"):
+    with pytest.raises(IntegrityError, match=r"symlink|escapes"):
         FilesystemCacheStore(root)
 
 

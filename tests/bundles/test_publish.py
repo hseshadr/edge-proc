@@ -140,6 +140,29 @@ def test_publish_refuses_symlinked_flat_origin_directories(
     assert list(outside.iterdir()) == []
 
 
+def test_publish_refuses_existing_symlinked_flat_chunk_leaf(tmp_path: Path) -> None:
+    origin = tmp_path / "origin"
+    store = FilesystemCacheStore(origin)
+    payload = b"leaf containment"
+    digest = store.put_chunk(payload)
+    (origin / "chunk").mkdir()
+    victim = origin / "victim"
+    victim.write_bytes((origin / "chunks" / digest[:2] / digest).read_bytes())
+    (origin / "chunk" / digest).symlink_to(victim)
+    private, _ = generate_keypair()
+
+    with pytest.raises(ValueError, match="published chunk"):
+        build_bundle(
+            files={"leaf.bin": payload},
+            store=store,
+            chunker=GearCDC(),
+            signer=Ed25519Signer(private),
+            bundle_id="b",
+            version="1.0.0",
+        )
+    assert not (origin / "latest").exists()
+
+
 def test_republish_unchanged_catalog_touches_zero_chunk_files(tmp_path: Path) -> None:
     """A second ``build_bundle`` over the same files mustn't rewrite existing chunks."""
     private, _public = generate_keypair()
