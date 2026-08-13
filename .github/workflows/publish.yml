@@ -42,7 +42,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Python + uv (+ sync)
-        uses: hseshadr/ci/.github/actions/setup-python-uv@605e51cbc86f452b56edcf1c9660921da797cbfe # ci-v3.2.1
+        uses: hseshadr/ci/.github/actions/setup-python-uv@b10a24c576f8210635f00f5e5fd7a27c614409a9 # ci-v3.2.1
         with:
           sync-args: "--frozen --all-extras"
 
