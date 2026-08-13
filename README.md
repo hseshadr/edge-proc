@@ -147,8 +147,7 @@ du -sh model
 ```
 
 ```text
-index.faiss
-state.json
+snapshots/
  87M	model
 ```
 
@@ -201,7 +200,7 @@ uv run edgeproc sync \
 ```
 
 ```text
-synced v1.0.0 manifest=4587411eea91 chunks_fetched=2151 chunks_reused=0 bytes_fetched=83388300
+synced v1.0.0 manifest=4587411eea91 chunks_fetched=2152 chunks_reused=0 bytes_fetched=83404167
 ```
 
 83 MB, because this is the first sync and the model is most of it. Later syncs move kilobytes —
@@ -245,13 +244,14 @@ uv run edgeproc sync --base-url origin --cache-dir cache --key keys/public.key -
 ```
 
 ```text
-synced v1.0.0 manifest=4587411eea91 chunks_fetched=0 chunks_reused=2151 bytes_fetched=0
+synced v1.0.0 manifest=4587411eea91 chunks_fetched=0 chunks_reused=2152 bytes_fetched=0
 ```
 
-**A small edit ships as a small delta.** Publish `1.0.1` with one line appended, then re-sync:
+**A small edit ships as a small delta.** Add a tiny signed release note without touching the
+valid snapshot, publish `1.0.1`, then re-sync:
 
 ```bash
-echo "tiny edit" >> src/catalog_idx/state.json
+printf 'tiny edit\n' > src/release-note.txt
 
 uv run edgeproc publish --src src --origin-dir origin --key keys/private.key \
     --bundle-id catalog --version 1.0.1 --pretty
@@ -261,11 +261,11 @@ uv run edgeproc sync --base-url origin --cache-dir cache --key keys/public.key \
 
 ```text
 published v1.0.1 manifest=3f0941c9725a
-synced v1.0.1 manifest=3f0941c9725a chunks_fetched=1 chunks_reused=2150 bytes_fetched=157
+synced v1.0.1 manifest=3f0941c9725a chunks_fetched=1 chunks_reused=2152 bytes_fetched=19
 ```
 
-157 bytes instead of 83 MB — it re-fetched the one chunk that changed and reused the other
-2,150, model included.
+19 compressed bytes instead of 83 MB — it fetched the one new chunk and reused the other
+2,152, model included. The snapshot under `src/catalog_idx/snapshots/` remains valid.
 
 **No model, no answers.** Drop `--model-path` and `route` refuses. It does not fall back to
 downloading one, which is the whole reason step 5 can run on an unplugged machine:

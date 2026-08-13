@@ -83,7 +83,10 @@ responsibility.
   selected generation during save: if another process committed first, save raises
   `SnapshotConflictError`; reload, reapply the intended mutation, and retry. It
   recovers the previous complete generation when the newest commit is corrupt, retains only
-  those two generations, and migrates a valid 0.4.0 two-file directory on first load.
+  those two generations, and migrates a valid 0.4.0 two-file directory on first load. A
+  post-commit cleanup failure emits a warning log but does not misreport the already-active
+  save as failed; the next save retries cleanup. Snapshot roots and internal directories must
+  be real directories—symlinks and non-directories are refused before any snapshot write.
 - **Resource ceilings:** defaults are a 30-second HTTP client timeout per network
   operation, 256 MiB per response, 64 MiB decompressed per chunk, 4 GiB and 100,000 files
   per sync, 256 MiB per materialized file, and 30-second mutation and vector-snapshot lock

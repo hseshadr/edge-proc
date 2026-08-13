@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner, Result
 
+from edgeproc.bundles import publish
 from edgeproc.bundles.cas import FilesystemCacheStore
 from edgeproc.bundles.chunking import GearCDC
 from edgeproc.bundles.manifest import VersionPointer, pointer_signing_bytes
@@ -74,6 +75,53 @@ def test_build_bundle_round_trips_into_fresh_store(tmp_path: Path) -> None:
         assert materialize_file(store, manifest, path) == original
     faiss = next(e for e in manifest.files if e.path == "index.faiss")
     assert len(faiss.chunks) >= 2  # the >256 KiB file really split
+
+
+def test_origin_chunks_are_durable_before_latest_is_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    origin = tmp_path / "origin"
+    chunk_directory_synced = False
+    real_fsync_directory = publish._fsync_directory
+    real_write = FilesystemCacheStore.write_atomic
+
+    def record_directory(path: Path) -> None:
+        nonlocal chunk_directory_synced
+        if path == origin / "chunk":
+            chunk_directory_synced = True
+        real_fsync_directory(path)
+
+    def assert_order(store: FilesystemCacheStore, relative_path: str, data: bytes) -> None:
+        if relative_path == "latest":
+            assert chunk_directory_synced
+        real_write(store, relative_path, data)
+
+    monkeypatch.setattr(publish, "_fsync_directory", record_directory)
+    monkeypatch.setattr(FilesystemCacheStore, "write_atomic", assert_order)
+    private, _ = generate_keypair()
+    _publish(origin, Ed25519Signer(private), _FILES, "1.0.0")
+
+    assert all(path.is_file() for path in (origin / "chunk").iterdir())
+    assert chunk_directory_synced
+
+
+def test_origin_copy_fallback_fsyncs_each_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    origin = tmp_path / "origin"
+    synced_files: list[Path] = []
+
+    def fail_link(_src: object, _dst: object) -> None:
+        raise OSError("simulate unsupported hardlinks")
+
+    def record(path: Path) -> None:
+        synced_files.append(path)
+
+    monkeypatch.setattr(os, "link", fail_link)
+    monkeypatch.setattr(publish, "_fsync_file", record)
+    private, _ = generate_keypair()
+    _publish(origin, Ed25519Signer(private), _FILES, "1.0.0")
+    assert set(synced_files) == set((origin / "chunk").iterdir())
 
 
 def test_republish_unchanged_catalog_touches_zero_chunk_files(tmp_path: Path) -> None:

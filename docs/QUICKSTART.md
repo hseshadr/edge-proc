@@ -11,7 +11,7 @@ connection): about **70 seconds of machine time** and about **1.4 GB of disk**.
 | | measured |
 |---|---|
 | `uv sync --all-extras` | 5.5 s, 75 packages, 947 MB venv (torch + FAISS dominate) |
-| `uv run poe gate` | ~20 s, 419 tests |
+| `uv run poe gate` | ~20 s, 425 tests |
 | step 2, first run | 45 s — the one-time `all-MiniLM-L6-v2` download is 87 MB of it |
 | steps 3–7 | 21 s — publish and sync move that 87 MB model too |
 
@@ -121,7 +121,7 @@ uv run edgeproc sync \
     --key keys/public.key \
     --materialize-to materialized \
     --pretty
-#   synced v1.0.0 manifest=4587411eea91 chunks_fetched=2151 chunks_reused=0 bytes_fetched=83388300
+#   synced v1.0.0 manifest=4587411eea91 chunks_fetched=2152 chunks_reused=0 bytes_fetched=83404167
 ```
 
 83 MB because this is the first sync and the model is nearly all of it; step 6 shows what a later one costs. `materialized/` now holds `catalog_idx/` and `model/`, both verified against the pinned key.
@@ -162,10 +162,12 @@ The exit code mirrors `success` (`0` ok, `1` for `no_runtime_accepted` or any ve
 
 ## 6. Test a delta release
 
-Publish a `1.0.1` with a small edit. Re-`sync` should fetch only the changed chunks (`chunks_reused > chunks_fetched`):
+Publish a `1.0.1` with a tiny signed release note. This leaves the valid generation under
+`src/catalog_idx/snapshots/` untouched. Re-`sync` fetches only the new chunk
+(`chunks_reused > chunks_fetched`):
 
 ```bash
-echo "tiny edit" >> src/catalog_idx/state.json
+printf 'tiny edit\n' > src/release-note.txt
 
 uv run edgeproc publish \
     --src src --origin-dir origin --key keys/private.key \
@@ -175,10 +177,11 @@ uv run edgeproc publish \
 uv run edgeproc sync \
     --base-url origin --cache-dir cache --key keys/public.key \
     --materialize-to materialized --pretty
-#   synced v1.0.1 manifest=3f0941c9725a chunks_fetched=1 chunks_reused=2150 bytes_fetched=157
+#   synced v1.0.1 manifest=3f0941c9725a chunks_fetched=1 chunks_reused=2152 bytes_fetched=19
 ```
 
-157 bytes instead of the original 83 MB — one changed chunk re-fetched, the other 2,150 reused, the whole model among them.
+19 compressed bytes instead of the original 83 MB — one new chunk fetched, the other 2,152
+reused, the whole model among them.
 
 ## 7. Try a tampered origin
 

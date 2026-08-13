@@ -16,11 +16,15 @@ This corrective release supersedes 0.4.0 for applications that persist a
   snapshot cleanup share one bounded cross-process lock; an interrupted save is ignored, the
   previous complete generation remains recoverable, and retention is bounded to those two
   generations. Loaded writers compare-and-swap their generation so a stale process cannot
-  erase a newer commit; file verification streams with bounded memory. Valid 0.4.0 index
+  erase a newer commit; file verification streams with bounded memory; snapshot-directory
+  symlinks are refused. Cleanup after an active commit is best-effort and observable, so a
+  cleanup failure cannot falsely report that the committed save failed. Valid 0.4.0 index
   directories migrate on first load.
 - CAS atomic writes now flush every newly created parent and shard plus the directory after
   `os.replace`, so new directory entries—not only file contents—survive a power-loss boundary
   on durable filesystems.
+- Published-origin chunk links are flushed before the durable `latest` pointer; copy fallback
+  also flushes each destination file so `latest` cannot outlive the objects it references.
 - The source distribution now includes the benchmarks, operational docs, workflow fixtures,
   mutation harness, environment example, citation, roadmap, contributor guide, and lockfile
   required by its shipped test suite. Its contract tests run from the extracted archive.

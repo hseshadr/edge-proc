@@ -657,6 +657,43 @@ async def test_failed_manifest_commit_keeps_old_generation_and_gc_removes_orphan
     assert len(list((directory / "snapshots").glob("*.faiss"))) == 2
 
 
+async def test_post_commit_gc_failure_does_not_report_a_failed_save(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    directory = tmp_path / "vec"
+    idx = _index()
+    await idx.insert([_emb("old", [1.0, 0.0, 0.0, 0.0])])
+    idx.save(directory)
+    await idx.insert([_emb("new", [0.0, 1.0, 0.0, 0.0])])
+
+    def fail_gc(_store: SnapshotStore) -> None:
+        raise OSError("simulated post-commit GC failure")
+
+    monkeypatch.setattr(SnapshotStore, "_collect_old_generations", fail_gc)
+    idx.save(directory)
+    idx.save(directory)
+    assert "snapshot committed; deferred cleanup failed" in caplog.text
+    loaded = FaissVectorIndex.load("products", directory)
+    assert {item for item, _ in await loaded.search([1.0, 0.0, 0.0, 0.0], 5)} == {
+        "old",
+        "new",
+    }
+
+
+async def test_save_refuses_a_symlinked_snapshot_directory(tmp_path: Path) -> None:
+    directory = tmp_path / "vec"
+    outside = tmp_path / "outside"
+    directory.mkdir()
+    outside.mkdir()
+    (directory / "snapshots").symlink_to(outside, target_is_directory=True)
+    idx = _index()
+    await idx.insert([_emb("red", [1.0, 0.0, 0.0, 0.0])])
+
+    with pytest.raises(ValueError, match="snapshot directory"):
+        idx.save(directory)
+    assert list(outside.iterdir()) == []
+
+
 async def test_partial_state_write_never_becomes_a_committed_snapshot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

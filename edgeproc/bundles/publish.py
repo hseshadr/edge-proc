@@ -158,6 +158,7 @@ def _lay_out_origin(
         if dst.exists():
             continue
         _link_or_copy(_store_chunk_path(store, chunk_hash), dst)
+    _fsync_directory(root / "chunk")
     store.write_atomic("latest", pointer.model_dump_json().encode("utf-8"))
 
 
@@ -172,3 +173,18 @@ def _link_or_copy(src: Path, dst: Path) -> None:
         os.link(src, dst)
     except OSError:
         shutil.copy2(src, dst)
+        _fsync_file(dst)
+
+
+def _fsync_file(path: Path) -> None:
+    with path.open("rb") as handle:
+        os.fsync(handle.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    fd = os.open(path, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)

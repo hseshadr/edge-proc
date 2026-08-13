@@ -104,6 +104,13 @@ def test_operations_contract_explains_the_one_commit_snapshot_boundary() -> None
     assert "previous complete generation" in operations
 
 
+@pytest.mark.parametrize("document", ["README.md", "docs/QUICKSTART.md"])
+def test_runnable_docs_never_edit_the_retired_legacy_snapshot_sidecar(document: str) -> None:
+    copy = _read(document)
+    assert "src/catalog_idx/state.json" not in copy
+    assert "src/catalog_idx/snapshots/" in copy
+
+
 def test_budget_copy_distinguishes_admission_from_native_rss_enforcement() -> None:
     readme = _read("README.md")
     assert "MemoryManager" in readme

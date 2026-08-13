@@ -10,6 +10,7 @@ an orphaned generation, never an active hybrid.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 from collections.abc import Callable
@@ -26,6 +27,7 @@ _MANIFEST_NAME: Final[re.Pattern[str]] = re.compile(r"^[0-9]{20}\.snapshot\.json
 _RETAIN_GENERATIONS: Final[int] = 2  # active snapshot plus one crash-recovery fallback
 _MAX_SEQUENCE: Final[int] = 99_999_999_999_999_999_999
 _HASH_BLOCK_BYTES: Final[int] = 512 * 1024
+_LOG = logging.getLogger(__name__)
 
 
 class NoSnapshotError(FileNotFoundError):
@@ -73,13 +75,17 @@ class SnapshotStore:
     """Generation-addressed snapshot persistence rooted at one index directory."""
 
     def __init__(self, directory: Path) -> None:
+        _durable_mkdir(directory)
+        _require_real_directory(directory, "vector-index root")
         self._snapshots = directory / _SNAPSHOT_DIR
         _durable_mkdir(self._snapshots)
+        _require_real_directory(self._snapshots, "snapshot directory")
 
     @staticmethod
     def prepare_root(directory: Path) -> None:
         """Create an index root and persist that new entry in its parent directory."""
         _durable_mkdir(directory)
+        _require_real_directory(directory, "vector-index root")
 
     def commit(
         self,
@@ -104,6 +110,7 @@ class SnapshotStore:
         try:
             _stage_generation(paths, write_index, state_bytes)
             self._commit_manifest(paths, sequence)
+            self._collect_after_commit()
             return SnapshotRevision(sequence, generation)
         finally:
             paths.index_temp.unlink(missing_ok=True)
@@ -167,9 +174,14 @@ class SnapshotStore:
             _write_fsynced(temp, manifest.model_dump_json().encode("utf-8"))
             os.replace(temp, self._manifest_path(sequence))
             _fsync_directory(self._snapshots)
-            self._collect_old_generations()
         finally:
             temp.unlink(missing_ok=True)
+
+    def _collect_after_commit(self) -> None:
+        try:
+            self._collect_old_generations()
+        except (OSError, ValueError) as exc:
+            _LOG.warning("snapshot committed; deferred cleanup failed: %s", exc)
 
     def _manifest_path(self, sequence: int) -> Path:
         if not 1 <= sequence <= _MAX_SEQUENCE:
@@ -292,3 +304,8 @@ def _durable_mkdir(path: Path) -> None:
     for directory in reversed(missing):
         directory.mkdir(exist_ok=True)
         _fsync_directory(directory.parent)
+
+
+def _require_real_directory(path: Path, label: str) -> None:
+    if path.is_symlink() or not path.is_dir():
+        raise ValueError(f"{label} must be a real directory, not a symlink or non-directory")
