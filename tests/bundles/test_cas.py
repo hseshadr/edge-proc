@@ -503,6 +503,58 @@ def test_gc_removes_orphans_keeps_active_and_shared(tmp_path: Path) -> None:
     assert not store.has_chunk(_chunk_hash(only_b))
 
 
+def test_gc_refuses_symlinked_chunk_shard_without_deleting_external_file(tmp_path: Path) -> None:
+    store = _store(tmp_path / "cache")
+    _promote_manifest(store, _manifest_for(store, b"active payload"))
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    victim = outside / ("f" * 64)
+    victim.write_bytes(b"must survive")
+    (store.root / "chunks" / "ff").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(IntegrityError, match="symlink"):
+        store.gc()
+
+    assert victim.read_bytes() == b"must survive"
+
+
+def test_gc_refuses_symlinked_chunk_leaf_without_touching_target(tmp_path: Path) -> None:
+    store = _store(tmp_path / "cache")
+    _promote_manifest(store, _manifest_for(store, b"active payload"))
+    victim = tmp_path / "outside-chunk"
+    victim.write_bytes(b"must survive")
+    shard = store.root / "chunks" / "ff"
+    shard.mkdir()
+    (shard / ("f" * 64)).symlink_to(victim)
+
+    with pytest.raises(IntegrityError, match="symlink"):
+        store.gc()
+
+    assert victim.read_bytes() == b"must survive"
+
+
+def test_gc_refuses_a_non_directory_chunk_shard(tmp_path: Path) -> None:
+    store = _store(tmp_path / "cache")
+    _promote_manifest(store, _manifest_for(store, b"active payload"))
+    (store.root / "chunks" / "ff").write_bytes(b"not a shard")
+
+    with pytest.raises(IntegrityError, match="real directory"):
+        store.gc()
+
+
+def test_gc_refuses_symlinked_manifest_leaf_without_touching_target(tmp_path: Path) -> None:
+    store = _store(tmp_path / "cache")
+    _promote_manifest(store, _manifest_for(store, b"active payload"))
+    victim = tmp_path / "outside-manifest"
+    victim.write_bytes(b"must survive")
+    (store.root / "manifests" / ("f" * 64)).symlink_to(victim)
+
+    with pytest.raises(IntegrityError, match="symlink"):
+        store.gc()
+
+    assert victim.read_bytes() == b"must survive"
+
+
 def test_gc_fail_closed_on_non_canonical_active_manifest(tmp_path: Path) -> None:
     # The active pointer names a stored blob that parses but is NOT canonical
     # (its bytes != canonical_bytes), so its name is not its true digest → reject.

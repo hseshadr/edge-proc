@@ -28,6 +28,9 @@ This corrective release supersedes 0.4.0 for applications that persist a
   Symlinked flat-origin chunk or manifest directories are refused before publication.
 - Snapshot, CAS, pointer, and flat-origin object leaves now refuse symlinks even when the
   target stays inside the selected root; no trusted pointer advances over an aliased object.
+  CAS garbage collection refuses symlinked chunk shards and object leaves before sweeping,
+  so cleanup cannot unlink a file outside its cache. The publisher refuses symlinks under
+  `--src`, so a source-tree alias cannot pull an external file into a signed release.
 - The source distribution now includes the benchmarks, operational docs, workflow fixtures,
   mutation harness, environment example, citation, roadmap, contributor guide, and lockfile
   required by its shipped test suite. Its contract tests run from the extracted archive.

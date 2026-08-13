@@ -512,14 +512,34 @@ def _load_signer(key: Path, signer_cls: type[Ed25519Signer]) -> Signer:
 
 def _read_src(src: Path) -> dict[str, bytes]:
     """Read every file under ``src`` into ``{relative-posix-path: bytes}`` (fail closed)."""
-    if not src.is_dir():
-        _fail(f"src is not a directory: {src}")
+    paths = _safe_src_paths(src)
     files = {
-        p.relative_to(src).as_posix(): p.read_bytes() for p in sorted(src.rglob("*")) if p.is_file()
+        path.relative_to(src).as_posix(): path.read_bytes() for path in paths if path.is_file()
     }
     if not files:
         _fail(f"no files to publish under {src}")
     return files
+
+
+def _safe_src_paths(src: Path) -> list[Path]:
+    """Enumerate only real leaves below the selected source root."""
+    _require_source_root(src)
+    paths = sorted(src.rglob("*"))
+    _refuse_source_symlinks(src, paths)
+    return paths
+
+
+def _require_source_root(src: Path) -> None:
+    if src.is_symlink():
+        _fail(f"src must not be a symlink: {src}")
+    if not src.is_dir():
+        _fail(f"src is not a directory: {src}")
+
+
+def _refuse_source_symlinks(src: Path, paths: list[Path]) -> None:
+    symlink = next((path for path in paths if path.is_symlink()), None)
+    if symlink is not None:
+        _fail(f"src contains a symlink: {symlink.relative_to(src)}")
 
 
 def _render_pointer(pointer: VersionPointer, *, pretty: bool) -> str:

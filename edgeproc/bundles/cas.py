@@ -343,15 +343,24 @@ class FilesystemCacheStore:
 
     def _sweep_chunks(self, keep: set[str]) -> int:
         removed = 0
-        for path in self._store_path("chunks").glob("*/*"):
+        for path in self._chunk_files():
+            _refuse_symlink(path)
             if path.is_file() and path.name not in keep:
                 path.unlink()
                 removed += 1
         return removed
 
+    def _chunk_files(self) -> Iterator[Path]:
+        for shard in self._store_path("chunks").iterdir():
+            _refuse_symlink(shard)
+            if not shard.is_dir():
+                raise IntegrityError("chunk shard must be a real directory")
+            yield from shard.iterdir()
+
     def _sweep_manifests(self, keep: str) -> int:
         removed = 0
         for path in self._store_path("manifests").iterdir():
+            _refuse_symlink(path)
             if path.is_file() and path.name != keep:
                 path.unlink()
                 removed += 1

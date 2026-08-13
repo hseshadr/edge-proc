@@ -404,6 +404,34 @@ def test_cli_publish_refuses_an_empty_src_directory(tmp_path: Path) -> None:
     assert not (tmp_path / "origin").exists()  # nothing was minted
 
 
+def test_cli_publish_refuses_a_symlinked_source_file(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    src.mkdir()
+    secret = tmp_path / "outside-secret"
+    secret.write_bytes(b"must not be published")
+    (src / "linked-secret").symlink_to(secret)
+
+    result = _publish_src(tmp_path, src)
+
+    assert result.exit_code == 1
+    assert "symlink" in result.stderr
+    assert not (tmp_path / "origin").exists()
+
+
+def test_cli_publish_refuses_a_symlinked_source_root(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret").write_bytes(b"must not be published")
+    src = tmp_path / "src"
+    src.symlink_to(outside, target_is_directory=True)
+
+    result = _publish_src(tmp_path, src)
+
+    assert result.exit_code == 1
+    assert "symlink" in result.stderr
+    assert not (tmp_path / "origin").exists()
+
+
 def test_cli_publish_bind_identity_then_sync_with_matching_pin(tmp_path: Path) -> None:
     """`--bind-identity`/`--channel`/`--sequence` + a matching `--expected-*` pin round-trips."""
     src = _write_src(tmp_path / "src", _FILES)
