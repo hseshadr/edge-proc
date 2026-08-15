@@ -18,9 +18,10 @@
 #
 # Tag creation does not trigger ci.yml. This workflow therefore re-runs the complete release
 # contract on the tagged ref itself: source identity, the full gate, the real example,
-# benchmark, a full-history secret scan, and the locked dependency audit. That unprivileged
-# job also builds, validates, hashes, and uploads the archives. The OIDC-bearing job only
-# downloads, re-verifies, and publishes them; registry verification runs unprivileged afterward.
+# benchmark, a full-history secret scan, and the shared locked-dependency audit. The
+# unprivileged eligibility job also builds, validates, hashes, and uploads the archives.
+# The OIDC-bearing job only downloads, re-verifies, and publishes them; registry
+# verification runs unprivileged afterward.
 #
 # NOTE: every `uses:` below is pinned to a full commit SHA, not a moving tag — a tag can
 # be repointed at new code, a SHA cannot. The trailing comment records which release that
@@ -34,7 +35,15 @@ on:
 permissions:
   contents: read
 jobs:
+  dependency-audit:
+    permissions:
+      contents: read
+    uses: hseshadr/ci/.github/workflows/security-audit.yml@605e51cbc86f452b56edcf1c9660921da797cbfe # ci-v3.2.1
+    with:
+      run-python-audit: true
+
   release-eligibility:
+    needs: [dependency-audit]
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -137,12 +146,6 @@ jobs:
 
       - name: Run the release benchmark
         run: uv run python benchmarks/benchmark.py
-
-      - name: Export locked dependencies
-        run: uv export --frozen --all-extras --no-emit-project --no-hashes -o requirements-audit.txt
-
-      - name: Audit locked dependencies
-        run: uvx pip-audit -r requirements-audit.txt --disable-pip --no-deps
 
       # Build backends execute project-controlled Python. Keep them in this unprivileged
       # job so neither hatchling nor any installed dependency can request a PyPI OIDC token.

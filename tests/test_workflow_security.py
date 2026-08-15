@@ -32,10 +32,12 @@ RELEASE_COMMANDS = (
     "uv run poe gate",
     "bash examples/run_loop.sh",
     "uv run python benchmarks/benchmark.py",
-    "uv export --frozen --all-extras --no-emit-project --no-hashes",
-    "uvx pip-audit -r requirements-audit.txt --disable-pip --no-deps",
 )
 RELEASE_JOBS = {"release-eligibility"}
+DEPENDENCY_AUDIT_WORKFLOW = (
+    "hseshadr/ci/.github/workflows/security-audit.yml@605e51cbc86f452b56edcf1c9660921da797cbfe"
+)
+INLINE_DEPENDENCY_AUDIT = ("uv export --frozen", "uvx pip-audit")
 GITLEAKS_ACTION = "gitleaks/gitleaks-action"
 RELEASE_SCAN_COMMAND = 'gitleaks detect --redact --no-banner --source . --log-opts="--all"'
 RELEASE_SCAN_STEP = "Scan release history and tree for secrets"
@@ -406,6 +408,20 @@ def _validator(job: str, step: str) -> str:
 def test_tag_publish_waits_for_every_documented_release_check() -> None:
     """Removing any exact-ref eligibility lane must block the upload job."""
     assert _release_contract_defects(_workflow_document()) == []
+
+
+def test_tag_publish_delegates_dependency_audit_before_release_eligibility() -> None:
+    """A release cannot bypass or duplicate the shared exact-ref dependency audit."""
+    document = _workflow_document()
+    audit = _job(document, "dependency-audit")
+    eligible = _job(document, "release-eligibility")
+
+    assert audit.get("uses") == DEPENDENCY_AUDIT_WORKFLOW
+    assert _mapping(audit.get("with")).get("run-python-audit") is True
+    assert _mapping(audit.get("permissions")) == {"contents": "read"}
+    assert _needs(eligible) == {"dependency-audit"}
+    commands = "\n".join(str(step.get("run", "")) for step in _steps(eligible))
+    assert not any(command in commands for command in INLINE_DEPENDENCY_AUDIT)
 
 
 def test_tag_publish_requires_the_exact_protected_main_commit() -> None:
