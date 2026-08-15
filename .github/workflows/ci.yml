@@ -20,7 +20,7 @@ jobs:
       - name: Install uv
         # Full version pin required: astral-sh/setup-uv publishes no floating
         # major tag (`@v8` fails to resolve). Dependabot walks the pin forward.
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
         with:
           version: "latest"
       - name: Pin Python
@@ -52,4 +52,4 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    uses: hseshadr/ci/.github/workflows/secret-scan.yml@605e51cbc86f452b56edcf1c9660921da797cbfe # ci-v3.2.1
+    uses: hseshadr/ci/.github/workflows/secret-scan.yml@b10a24c576f8210635f00f5e5fd7a27c614409a9 # ci-v3.2.1
