@@ -15,6 +15,7 @@ from email.message import Message
 from email.parser import BytesParser
 from pathlib import Path
 from typing import Final
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from pydantic import BaseModel, ConfigDict
@@ -42,6 +43,7 @@ class HostedPayload(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     main_sha: str
+    tag_sha: str
     check_runs: tuple[CheckRun, ...]
 
 
@@ -129,13 +131,18 @@ def _is_green_dagger(run: CheckRun, expected_sha: str) -> bool:
     return run.name == "Dagger" and run.head_sha == expected_sha and run.conclusion == "success"
 
 
+def _hosted_identity_matches(observed: HostedPayload, expected_sha: str) -> bool:
+    identities = (expected_sha, observed.main_sha, observed.tag_sha)
+    return _valid_sha(expected_sha) and len(set(identities)) == 1
+
+
 def validate_hosted_eligibility(payload: str, expected_sha: str) -> None:
-    """Require exact current main and a successful Dagger check on that commit."""
+    """Require exact tag/main identity and a green Dagger check on that commit."""
     observed = HostedPayload.model_validate_json(payload)
-    identity_matches = _valid_sha(expected_sha) and observed.main_sha == expected_sha
+    identity_matches = _hosted_identity_matches(observed, expected_sha)
     matching = any(_is_green_dagger(run, expected_sha) for run in observed.check_runs)
     if not identity_matches or not matching:
-        raise ReleaseContractError("hosted eligibility: exact main lacks a green Dagger check")
+        raise ReleaseContractError("hosted eligibility: exact tag/main lacks a green Dagger check")
 
 
 def _github_json(url: str, token: str) -> dict[str, object]:
@@ -163,15 +170,18 @@ def _check_runs(value: object) -> tuple[CheckRun, ...]:
     return tuple(_check_run(item) for item in value)
 
 
-def fetch_hosted_payload(repository: str, commit: str, token: str) -> str:
+def fetch_hosted_payload(repository: str, commit: str, tag: str, token: str) -> str:
     """Fetch and reduce GitHub state to the strict release eligibility schema."""
     api = f"https://api.github.com/repos/{repository}"
     main = _github_json(f"{api}/commits/main", token)
+    tagged = _github_json(f"{api}/commits/{quote(tag, safe='')}", token)
     checks = _github_json(f"{api}/commits/{commit}/check-runs?per_page=100", token)
-    if not isinstance(main.get("sha"), str):
+    if not isinstance(main.get("sha"), str) or not isinstance(tagged.get("sha"), str):
         raise ReleaseContractError("hosted eligibility: GitHub response fields are invalid")
     selected = _check_runs(checks.get("check_runs"))
-    return HostedPayload(main_sha=str(main["sha"]), check_runs=selected).model_dump_json()
+    return HostedPayload(
+        main_sha=str(main["sha"]), tag_sha=str(tagged["sha"]), check_runs=selected
+    ).model_dump_json()
 
 
 def write_checksums(dist: Path, output: Path) -> None:
@@ -199,6 +209,7 @@ def _parser() -> argparse.ArgumentParser:
     github = subparsers.add_parser("github")
     github.add_argument("--repository", required=True)
     github.add_argument("--sha", required=True)
+    github.add_argument("--tag", required=True)
     checksums = subparsers.add_parser("checksums")
     checksums.add_argument("--dist", type=Path, required=True)
     checksums.add_argument("--output", type=Path, required=True)
@@ -219,7 +230,7 @@ def _hosted(args: argparse.Namespace) -> None:
 
 def _github(args: argparse.Namespace) -> None:
     token = os.environ.get("GITHUB_TOKEN", "")
-    payload = fetch_hosted_payload(args.repository, args.sha, token)
+    payload = fetch_hosted_payload(args.repository, args.sha, args.tag, token)
     validate_hosted_eligibility(payload, args.sha)
 
 
