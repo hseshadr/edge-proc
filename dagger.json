@@ -1,0 +1,8 @@
+{
+  "name": "edge-proc",
+  "engineVersion": "v0.21.8",
+  "sdk": {
+    "source": "python"
+  },
+  "source": ".dagger"
+}
