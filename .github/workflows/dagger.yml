@@ -1,16 +1,16 @@
-name: Security audit
+name: Dagger
 
 on:
-  schedule:
-    - cron: "0 6 * * 1"
-  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
 
 permissions:
   contents: read
 
 jobs:
-  dependency-audit:
-    name: Dagger dependency audit
+  dagger:
+    name: Dagger
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -21,4 +21,4 @@ jobs:
         with:
           version: "0.21.8"
           verb: call
-          args: dependency-audit
+          args: ci --commit-sha=${{ github.sha }}

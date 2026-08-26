@@ -27,8 +27,10 @@ def test_sdist_contains_every_support_file_needed_by_its_tests(tmp_path: Path) -
         members = {Path(name).parts[1:] for name in package.getnames() if "/" in name}
     required = {
         (".env.example",),
-        (".github", "workflows", "ci.yml"),
+        (".dagger", "src", "edge_proc", "main.py"),
+        (".github", "workflows", "dagger.yml"),
         (".github", "workflows", "publish.yml"),
+        (".github", "workflows", "release-candidate.yml"),
         (".github", "workflows", "security-audit.yml"),
         ("CITATION.cff",),
         ("CLAUDE.md",),

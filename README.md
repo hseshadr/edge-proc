@@ -2,7 +2,7 @@
 
 **Ship a big file to a lot of devices — and let every one of them prove it's the real file, unmodified, before using it. Then send only the parts that changed.**
 
-[![CI](https://github.com/hseshadr/edge-proc/actions/workflows/ci.yml/badge.svg)](https://github.com/hseshadr/edge-proc/actions/workflows/ci.yml)
+[![Dagger](https://github.com/hseshadr/edge-proc/actions/workflows/dagger.yml/badge.svg)](https://github.com/hseshadr/edge-proc/actions/workflows/dagger.yml)
 [![PyPI](https://img.shields.io/pypi/v/edge-proc.svg)](https://pypi.org/project/edge-proc/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/downloads/)
@@ -556,9 +556,9 @@ uv sync --all-extras   # core + extras + dev tooling
 uv run poe gate        # lint + format-check + mypy strict + Radon Grade A + pytest (≥90% statement+branch cov)
 ```
 
-`poe gate` mirrors only the hosted `CI / gate` job. The separate hosted `Secret scan / gitleaks`
-job examines the commit range introduced by a push or pull request, so a green local gate is
-not evidence that the hosted secret scan ran or passed.
+`poe gate` is the product-quality portion of the hosted `Dagger` job. Dagger also runs the real
+example, benchmark, locked dependency audit, exact snapshot plus full commit-history secret scan,
+and workflow validation. A green local product gate alone is not evidence that those controls ran.
 
 ## About
 

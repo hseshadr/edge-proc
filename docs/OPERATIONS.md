@@ -170,23 +170,23 @@ every consumer, and the budgets above — not these figures — are what the gat
 
 ## Release evidence
 
-A release is eligible only when `uv run poe gate`, `bash examples/run_loop.sh`,
-`uv run python benchmarks/benchmark.py`, the secret scan, and dependency audit all pass on the
-exact commit. The tag-triggered `publish.yml` workflow first requires the tag to identify the
-exact current `main` commit with green hosted `gate`, `Secret scan / gitleaks`, and `pip-audit`
-checks. It then runs all five checks itself because tag creation does not trigger `ci.yml`.
-Before building, it verifies the exact tag/version/top-changelog identity; before OIDC upload,
-it verifies both built artifacts' project and version metadata. Record the immutable commit/tag
-and benchmark JSON; do not infer production truth from a different local tree.
+A release requires a fresh manual `workflow_dispatch`; pushing a tag never publishes by itself.
+Dagger first requires that the requested commit is the exact current `main` commit with a green
+hosted `Dagger` check. It fetches that immutable commit itself, verifies exact
+tag/version/top-changelog identity. Dagger runs all five checks: `uv run poe gate`, the real example,
+the benchmark, the locked dependency audit, and both the exact snapshot and full Git history
+secret scans. Dagger builds the wheel and sdist without build isolation, validates their project
+and version metadata, and records literal SHA-256 identities. Record the immutable commit/tag and
+benchmark JSON; do not infer production truth from a different local tree.
 
-Build and validation run in an unprivileged job that records the archive SHA-256 digests and
-uploads one short-lived workflow artifact. The OIDC-bearing job only downloads and re-verifies
-those archives with the runner standard library and coreutils before invoking the official PyPI
-publisher; it does not check out source, install dependencies, or execute the build backend.
-Registry propagation verification runs afterward in a third job without OIDC permission.
+Dagger builds and validates in an unprivileged job and exports one exact short-lived candidate.
+A pinned artifact-upload action is the only bridge out of that job. Its successful manual run
+triggers `publish.yml` from protected default-branch code. That source-free OIDC-bearing job only
+invokes pinned artifact download and official PyPI publish actions against the exact triggering run;
+it has no checkout, shell, dependency install, build backend, or project code execution. The manual
+dispatch is the fresh publication authorization.
 
-The local `poe gate` mirrors only the hosted `CI / gate` job. The separate hosted
-`Secret scan / gitleaks` job is the shared `hseshadr/ci` brick called from `ci.yml`; it scans
-the commit range of each push or PR, not the whole repository. The tag workflow independently
-scans the full Git history from the tagged checkout before the OIDC-bearing job becomes
-reachable. See the "no key material in the tree" invariant in `CLAUDE.md`.
+The local `poe gate` is only one portion of the hosted Dagger graph. Hosted pull requests pass
+their exact commit SHA so Gitleaks scans every ancestor introduced by the branch, including a
+secret added and later deleted before the tip. See the "no key material in the tree" invariant
+in `CLAUDE.md`.

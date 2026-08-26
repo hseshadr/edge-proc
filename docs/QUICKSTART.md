@@ -34,9 +34,9 @@ uv sync --all-extras    # core + [localvec] + [bundles] + dev tooling
 uv run poe gate         # lint + format-check + mypy strict + Radon Grade A + pytest (≥90% statement+branch cov)
 ```
 
-`poe gate` mirrors only the hosted `CI / gate` job. The separate hosted `Secret scan / gitleaks`
-job examines the commit range introduced by a push or pull request, so a green local gate is
-not evidence that the hosted secret scan ran or passed.
+`poe gate` is the product-quality portion of the hosted `Dagger` job. Dagger also runs the real
+example, benchmark, locked dependency audit, exact snapshot plus full commit-history secret scan,
+and workflow validation. A green local product gate alone is not evidence that those controls ran.
 
 ## 2. Persist a catalog index and the model that built it
 
