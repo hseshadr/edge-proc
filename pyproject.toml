@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling==1.27.0"]
+requires = ["hatchling==1.32.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -63,8 +63,8 @@ dev = [
     "radon>=6.0",
     "poethepoet>=0.48.0",
     "pyyaml>=6.0",  # tests/test_workflow_security.py parses .github/workflows/*.yml
-    "hatchling==1.27.0",  # locked build backend used by Dagger with no isolation
-    "pip-audit==2.9.0",  # locked dependency-audit executable and transitive graph
+    "hatchling==1.32.0",  # locked build backend used by Dagger with no isolation
+    "pip-audit==2.10.1",  # locked dependency-audit executable and transitive graph
 ]
 
 [project.scripts]
