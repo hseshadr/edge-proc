@@ -1,0 +1,42 @@
+name: Dagger release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing vX.Y.Z release tag identifying exact current main
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  candidate:
+    name: Dagger release candidate
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dagger/dagger-for-github@496f1b3d8b0d823834c13e67cf8a8e08ca3b9602 # v8.4.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          version: "0.21.8"
+          verb: call
+          args: >-
+            release-candidate --tag=${{ inputs.tag }} --commit-sha=${{ github.sha }}
+            --github-token=env:GITHUB_TOKEN export --path=release
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: edge-proc-${{ github.sha }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 1

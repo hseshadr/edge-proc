@@ -180,10 +180,11 @@ and version metadata, and records literal SHA-256 identities. Record the immutab
 benchmark JSON; do not infer production truth from a different local tree.
 
 Dagger builds and validates in an unprivileged job and exports one exact short-lived candidate.
-A pinned artifact-upload action is the only bridge out of that job. The source-free OIDC-bearing
-job only invokes pinned artifact download and official PyPI publish actions; it has no checkout,
-shell, dependency install, build backend, or project code execution. The manual dispatch is the
-fresh publication authorization.
+A pinned artifact-upload action is the only bridge out of that job. Its successful manual run
+triggers `publish.yml` from protected default-branch code. That source-free OIDC-bearing job only
+invokes pinned artifact download and official PyPI publish actions against the exact triggering run;
+it has no checkout, shell, dependency install, build backend, or project code execution. The manual
+dispatch is the fresh publication authorization.
 
 The local `poe gate` is only one portion of the hosted Dagger graph. Hosted pull requests pass
 their exact commit SHA so Gitleaks scans every ancestor introduced by the branch, including a

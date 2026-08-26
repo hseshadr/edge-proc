@@ -1,48 +1,20 @@
 name: Publish (PyPI, OIDC)
 
 on:
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: Existing vX.Y.Z release tag identifying exact current main
-        required: true
-        type: string
+  workflow_run:
+    workflows: [Dagger release candidate]
+    types: [completed]
 
 permissions:
   contents: read
 
 jobs:
-  candidate:
-    name: Dagger release candidate
-    runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      checks: read
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: dagger/dagger-for-github@496f1b3d8b0d823834c13e67cf8a8e08ca3b9602 # v8.4.0
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          version: "0.21.8"
-          verb: call
-          args: >-
-            release-candidate --tag=${{ inputs.tag }} --commit-sha=${{ github.sha }}
-            --github-token=env:GITHUB_TOKEN export --path=release
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: edge-proc-${{ github.sha }}
-          path: release/
-          if-no-files-found: error
-          retention-days: 1
-
   publish:
     name: Publish exact Dagger candidate
-    needs: candidate
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'workflow_dispatch' &&
+      github.event.workflow_run.head_branch == github.event.repository.default_branch
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -51,8 +23,10 @@ jobs:
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: edge-proc-${{ github.sha }}
+          name: edge-proc-${{ github.event.workflow_run.head_sha }}
           path: release
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           packages-dir: release/dist

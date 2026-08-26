@@ -29,9 +29,11 @@ def test_installable_version_names_the_offline_contract_release() -> None:
 
 def test_package_publish_requires_a_fresh_manual_dispatch() -> None:
     """A tag push alone never mutates the package registry."""
-    workflow = _read(".github/workflows/publish.yml")
-    assert "workflow_dispatch:" in workflow
-    assert 'tags: ["v*"]' not in workflow
+    candidate = _read(".github/workflows/release-candidate.yml")
+    publisher = _read(".github/workflows/publish.yml")
+    assert "workflow_dispatch:" in candidate
+    assert "workflow_run:" in publisher
+    assert 'tags: ["v*"]' not in candidate + publisher
 
 
 @pytest.mark.parametrize(

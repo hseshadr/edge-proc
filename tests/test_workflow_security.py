@@ -96,7 +96,7 @@ def test_should_route_scheduled_dependency_audit_only_through_dagger() -> None:
 
 
 def test_should_make_release_manual_and_dagger_proven() -> None:
-    document = _workflow("publish.yml")
+    document = _workflow("release-candidate.yml")
     triggers = _mapping(document.get("on"))
     candidate = _job(document, "candidate")
     steps = _steps(candidate)
@@ -112,9 +112,17 @@ def test_should_make_release_manual_and_dagger_proven() -> None:
 
 
 def test_should_keep_oidc_publisher_source_free_and_shell_free() -> None:
-    publish = _job(_workflow("publish.yml"), "publish")
+    document = _workflow("publish.yml")
+    publish = _job(document, "publish")
     steps = _steps(publish)
-    assert publish.get("needs") == "candidate"
+    triggers = _mapping(document.get("on"))
+    workflow_run = _mapping(triggers.get("workflow_run"))
+    assert workflow_run.get("workflows") == ["Dagger release candidate"]
+    assert workflow_run.get("types") == ["completed"]
+    condition = str(publish.get("if", ""))
+    assert "workflow_run.conclusion == 'success'" in condition
+    assert "workflow_run.event == 'workflow_dispatch'" in condition
+    assert "workflow_run.head_branch == github.event.repository.default_branch" in condition
     assert _mapping(publish.get("permissions")) == {
         "actions": "read",
         "contents": "read",
@@ -122,6 +130,9 @@ def test_should_keep_oidc_publisher_source_free_and_shell_free() -> None:
     }
     assert [_action(step) for step in steps] == [DOWNLOAD_ACTION, PUBLISH_ACTION]
     assert all("run" not in step for step in steps)
+    download = _mapping(steps[0].get("with"))
+    assert download.get("run-id") == "${{ github.event.workflow_run.id }}"
+    assert download.get("github-token") == "${{ github.token }}"
     settings = _mapping(steps[1].get("with"))
     assert settings.get("packages-dir") == "release/dist"
     assert settings.get("attestations") is True
