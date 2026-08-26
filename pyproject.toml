@@ -93,6 +93,7 @@ packages = ["edgeproc"]
 # A source archive that contains tests but omits their benchmarks, docs, workflow fixtures,
 # policy documents, mutation harness, or lockfile is not independently testable.
 only-include = [
+  ".dagger/src",
   ".env.example",
   ".github/workflows",
   "CITATION.cff",

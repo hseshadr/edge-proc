@@ -124,7 +124,10 @@ class EdgeProc:
 
     def _workflow_security(self, source: dagger.Directory) -> dagger.Container:
         workflows = source.directory(".github/workflows")
-        command = "actionlint .github/workflows/*.yml"
+        command = (
+            "find .github/workflows -type f "
+            "\\( -name '*.yml' -o -name '*.yaml' \\) -exec actionlint {} +"
+        )
         return (
             self._actionlint()
             .with_directory("/repo/.github/workflows", workflows)

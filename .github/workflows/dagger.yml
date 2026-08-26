@@ -1,15 +1,15 @@
-name: Dagger shadow
+name: Dagger
 
 on:
   push:
-    branches: [codex/dagger-ci-cd-20260825]
+    branches: [main]
   pull_request:
 
 permissions:
   contents: read
 
 jobs:
-  dagger-shadow:
+  dagger:
     name: Dagger
     runs-on: ubuntu-latest
     steps:

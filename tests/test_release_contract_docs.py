@@ -27,12 +27,11 @@ def test_installable_version_names_the_offline_contract_release() -> None:
     assert f"## [{RELEASE_VERSION}]" in _read("CHANGELOG.md")
 
 
-def test_publish_verification_allows_bounded_registry_propagation() -> None:
-    """A successful upload gets ten minutes to become independently observable."""
+def test_package_publish_requires_a_fresh_manual_dispatch() -> None:
+    """A tag push alone never mutates the package registry."""
     workflow = _read(".github/workflows/publish.yml")
-    assert "for attempt in $(seq 1 60)" in workflow
-    assert "Attempt ${attempt}/60" in workflow
-    assert "after ~10m" in workflow
+    assert "workflow_dispatch:" in workflow
+    assert 'tags: ["v*"]' not in workflow
 
 
 @pytest.mark.parametrize(
@@ -104,10 +103,10 @@ def test_security_policy_supports_only_the_current_release() -> None:
     assert "| 0.1.x" not in policy
 
 
-def test_ci_documents_core_as_a_locked_pypi_dependency() -> None:
-    workflow = _read(".github/workflows/ci.yml")
-    assert "edgeproc-core>=0.4.2 resolves from PyPI" in workflow
-    assert "pulled from public GitHub via the git source" not in workflow
+def test_dagger_installs_core_from_the_locked_pypi_graph() -> None:
+    graph = _read(".dagger/src/edge_proc/main.py")
+    assert '"uv", "sync", "--frozen", "--all-extras"' in graph
+    assert '"edgeproc-core>=0.4.2"' in _read("pyproject.toml")
 
 
 def test_quickstart_does_not_freeze_a_stale_test_count() -> None:
@@ -303,12 +302,12 @@ def test_readme_defers_percentile_figures_to_the_operations_contract() -> None:
 
 
 @pytest.mark.parametrize("document", ["README.md", "docs/QUICKSTART.md"])
-def test_local_gate_claim_separates_the_hosted_secret_scan(document: str) -> None:
-    """A green local gate predicts only its matching hosted job, not all of CI."""
+def test_local_gate_claim_separates_the_complete_dagger_graph(document: str) -> None:
+    """A green product gate is not a substitute for the complete hosted graph."""
     copy = " ".join(_read(document).split())
 
-    assert "`poe gate` mirrors only the hosted `CI / gate` job." in copy
-    assert "The separate hosted `Secret scan / gitleaks` job" in copy
+    assert "`poe gate` is the product-quality portion of the hosted `Dagger` job." in copy
+    assert "full commit-history secret scan" in copy
     assert "If it passes locally, CI passes." not in copy
 
 
@@ -350,13 +349,16 @@ def test_current_changelog_names_the_stable_read_only_lock_free_path() -> None:
     assert "Load, save, migration, and snapshot cleanup share one bounded" not in current
 
 
-def test_release_runbook_says_the_tag_workflow_rechecks_eligibility() -> None:
-    """A tag on an arbitrary commit cannot inherit checks from another CI ref."""
-    release = _read("docs/OPERATIONS.md").split("## Release evidence", maxsplit=1)[1]
+def test_release_runbook_says_dagger_proves_exact_manual_candidate() -> None:
+    """A manual request on an arbitrary commit cannot inherit another CI result."""
+    release = " ".join(
+        _read("docs/OPERATIONS.md").split("## Release evidence", maxsplit=1)[1].split()
+    )
 
-    assert "It then runs all five checks itself" in release
+    assert "manual `workflow_dispatch`" in release
+    assert "Dagger runs all five checks" in release
     assert "exact current `main` commit" in release
-    assert "green hosted `gate`, `Secret scan / gitleaks`, and `pip-audit`" in release
+    assert "green hosted `Dagger` check" in release
     assert "full Git history" in release
 
 
@@ -366,5 +368,8 @@ def test_release_runbook_keeps_build_code_outside_the_oidc_job() -> None:
         _read("docs/OPERATIONS.md").split("## Release evidence", maxsplit=1)[1].split()
     )
 
-    assert "Build and validation run in an unprivileged job" in release
-    assert "OIDC-bearing job only downloads and re-verifies" in release
+    assert "Dagger builds and validates in an unprivileged job" in release
+    assert (
+        "OIDC-bearing job only invokes pinned artifact download and official PyPI publish"
+        in release
+    )

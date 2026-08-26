@@ -74,3 +74,12 @@ def test_should_require_typed_secret_for_hosted_release_eligibility() -> None:
     assert token is not None
     assert token.annotation is dagger.Secret
     assert result is dagger.Directory
+
+
+def test_should_actionlint_both_github_workflow_extensions() -> None:
+    # Given / When
+    command = inspect.getsource(EdgeProc._workflow_security)
+
+    # Then
+    assert "*.yml" in command
+    assert "*.yaml" in command

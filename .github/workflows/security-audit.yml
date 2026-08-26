@@ -1,40 +1,24 @@
-# Weekly pip-audit over the locked dependency set (house standard §4).
-#
-# Deliberately its own workflow, not a CI step: new CVEs appear against unchanged
-# code, so this must run on a schedule — and a known-unfixable advisory must not
-# mask real code regressions in the main gate.
-# A red scheduled run counts as a red repo — check `gh run list` explicitly.
 name: Security audit
 
 on:
   schedule:
-    - cron: "0 6 * * 1" # Mondays 06:00 UTC — advisories move without commits
+    - cron: "0 6 * * 1"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  pip-audit:
+  dependency-audit:
+    name: Dagger dependency audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          python-version: "3.13"
-
-      - name: Install uv
-        # No floating v8 tag exists for setup-uv — full version pin required.
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dagger/dagger-for-github@496f1b3d8b0d823834c13e67cf8a8e08ca3b9602 # v8.4.0
         with:
-          version: "latest"
-
-      - name: Export locked dependencies
-        run: uv export --frozen --all-extras --no-emit-project --no-hashes -o requirements-audit.txt
-
-      # --disable-pip --no-deps: audit the pinned export directly, no venv.
-      # Safe because uv export pins the full transitive set from uv.lock.
-      - name: Audit dependencies for known vulnerabilities
-        run: uvx pip-audit -r requirements-audit.txt --disable-pip --no-deps
+          version: "0.21.8"
+          verb: call
+          args: dependency-audit
