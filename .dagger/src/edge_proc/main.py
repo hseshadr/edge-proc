@@ -154,7 +154,7 @@ class EdgeProc:
     ) -> dagger.Directory:
         """Build one exact, Dagger-proven candidate without publishing it."""
         self._require_sha(commit_sha)
-        await self._hosted(commit_sha, github_token).sync()
+        await self._hosted(commit_sha, tag, github_token).sync()
         source = self._release_source(commit_sha)
         await self._identity(source, tag).sync()
         await self._run_ci(source, commit_sha)
@@ -217,9 +217,11 @@ class EdgeProc:
             "SHA256SUMS",
         ]
 
-    def _hosted(self, commit: str, token: dagger.Secret) -> dagger.Container:
+    def _hosted(self, commit: str, tag: str, token: dagger.Secret) -> dagger.Container:
         container = self._python(self.source).with_secret_variable("GITHUB_TOKEN", token)
-        return container.with_exec(["sh", ".dagger/scripts/github-hosted.sh", commit, REPOSITORY])
+        return container.with_exec(
+            ["sh", ".dagger/scripts/github-hosted.sh", commit, tag, REPOSITORY]
+        )
 
     def _python(self, source: dagger.Directory) -> dagger.Container:
         base = (

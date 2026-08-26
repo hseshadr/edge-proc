@@ -60,10 +60,11 @@ def _write_distributions(dist: Path, name: str = "edge_proc", version: str = "1.
     _write_sdist(dist, name, version)
 
 
-def _hosted_payload(sha: str = SHA, conclusion: str = "success") -> str:
+def _hosted_payload(sha: str = SHA, conclusion: str = "success", tag_sha: str | None = None) -> str:
     return json.dumps(
         {
             "main_sha": sha,
+            "tag_sha": tag_sha or sha,
             "check_runs": [
                 {"name": "Dagger", "head_sha": sha, "conclusion": conclusion},
             ],
@@ -133,6 +134,8 @@ def test_should_reject_hosted_eligibility_when_main_or_dagger_check_is_not_exact
         contract.validate_hosted_eligibility(_hosted_payload("b" * 40), SHA)
     with pytest.raises(ValueError, match="hosted eligibility"):
         contract.validate_hosted_eligibility(_hosted_payload(SHA, "failure"), SHA)
+    with pytest.raises(ValueError, match="hosted eligibility"):
+        contract.validate_hosted_eligibility(_hosted_payload(SHA, tag_sha="b" * 40), SHA)
 
 
 def test_should_fetch_only_hosted_identity_fields(
@@ -142,6 +145,7 @@ def test_should_fetch_only_hosted_identity_fields(
     contract = _load_contract()
     responses = iter(
         [
+            io.BytesIO(json.dumps({"sha": SHA}).encode()),
             io.BytesIO(json.dumps({"sha": SHA}).encode()),
             io.BytesIO(
                 json.dumps(
@@ -162,7 +166,7 @@ def test_should_fetch_only_hosted_identity_fields(
     monkeypatch.setattr(contract, "urlopen", lambda *_args, **_kwargs: next(responses))
 
     # When
-    payload = contract.fetch_hosted_payload("hseshadr/edge-proc", SHA, "token")
+    payload = contract.fetch_hosted_payload("hseshadr/edge-proc", SHA, "v1.2.3", "token")
 
     # Then
     contract.validate_hosted_eligibility(payload, SHA)
