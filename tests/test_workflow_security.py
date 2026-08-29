@@ -90,9 +90,12 @@ def test_should_route_pull_request_and_main_ci_only_through_dagger() -> None:
     assert job.get("name") == "Dagger"
 
 
-def test_should_route_scheduled_dependency_audit_only_through_dagger() -> None:
+def test_should_route_scheduled_dependency_audit_with_exact_caller_identity() -> None:
     document = _workflow("security-audit.yml")
-    _assert_thin_dagger(_job(document, "dependency-audit"), "dependency-audit")
+    _assert_thin_dagger(
+        _job(document, "dependency-audit"),
+        "dependency-audit --commit-sha=${{ github.sha }}",
+    )
 
 
 def test_should_make_release_manual_and_dagger_proven() -> None:
@@ -107,8 +110,12 @@ def test_should_make_release_manual_and_dagger_proven() -> None:
     assert invocation.get("verb") == "call"
     assert str(invocation.get("args", "")).startswith("release-candidate ")
     assert "--commit-sha=${{ github.sha }}" in str(invocation.get("args"))
+    assert "--workflow-run-id" not in str(invocation.get("args"))
+    assert "--run-attempt" not in str(invocation.get("args"))
     assert "--github-token=env:GITHUB_TOKEN" in str(invocation.get("args"))
     assert "export --path=release" in str(invocation.get("args"))
+    upload = _mapping(steps[2].get("with"))
+    assert upload.get("name") == "edge-proc-${{ github.sha }}"
 
 
 def test_should_keep_oidc_publisher_source_free_and_shell_free() -> None:
@@ -131,6 +138,7 @@ def test_should_keep_oidc_publisher_source_free_and_shell_free() -> None:
     assert [_action(step) for step in steps] == [DOWNLOAD_ACTION, PUBLISH_ACTION]
     assert all("run" not in step for step in steps)
     download = _mapping(steps[0].get("with"))
+    assert download.get("name") == "edge-proc-${{ github.event.workflow_run.head_sha }}"
     assert download.get("run-id") == "${{ github.event.workflow_run.id }}"
     assert download.get("github-token") == "${{ github.token }}"
     settings = _mapping(steps[1].get("with"))

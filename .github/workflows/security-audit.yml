@@ -21,4 +21,4 @@ jobs:
         with:
           version: "0.21.8"
           verb: call
-          args: dependency-audit
+          args: dependency-audit --commit-sha=${{ github.sha }}
