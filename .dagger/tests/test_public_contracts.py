@@ -43,6 +43,18 @@ class SyncResult:
         return self
 
 
+class RecordingAudit(SyncResult):
+    """Record additional commands composed onto the shared audit."""
+
+    def __init__(self, events: list[str], commands: list[list[str]]) -> None:
+        super().__init__("audit", events)
+        self._commands = commands
+
+    def with_exec(self, command: list[str]) -> Self:
+        self._commands.append(command)
+        return self
+
+
 class RecordingFoundation:
     """Record exact source and shared-guard calls."""
 
@@ -125,6 +137,8 @@ class RecordingPythonPackage:
         self.events = events
         self.created = RecordingCandidate("created", "v0.4.1", events)
         self.verified = RecordingCandidate("verified", "v0.4.1", events)
+        self.audit_commands: list[list[str]] = []
+        self.audit_result = RecordingAudit(events, self.audit_commands)
         self.audit_call: tuple[dagger.Directory, str, str] | None = None
         self.candidate_call: tuple[object, ...] | None = None
         self.verify_call: tuple[object, ...] | None = None
@@ -133,7 +147,7 @@ class RecordingPythonPackage:
         self, source: dagger.Directory, repository: str, commit_sha: str
     ) -> dagger.Container:
         self.audit_call = source, repository, commit_sha
-        return cast(dagger.Container, SyncResult("audit", self.events))
+        return cast(dagger.Container, self.audit_result)
 
     def candidate(self, *arguments: object) -> RecordingCandidate:
         self.candidate_call = arguments
@@ -256,6 +270,20 @@ def test_should_bind_guard_then_run_product_and_closed_audit_on_one_source(
     ]
     assert edge.product_source is foundation.bound
     assert package.audit_call == (foundation.bound, REPOSITORY, COMMIT_SHA)
+
+
+def test_should_query_osv_for_non_pypi_locked_versions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given
+    _events, _foundation, package = _patch_clients(monkeypatch)
+    edge = _edge(cast(dagger.Directory, object()), [])
+
+    # When
+    edge.dependency_audit(COMMIT_SHA)
+
+    # Then
+    assert package.audit_commands == [list(dagger_module.OSV_AUDIT_COMMAND)]
 
 
 def test_should_stop_before_product_or_audit_when_shared_guard_rejects(
