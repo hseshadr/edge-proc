@@ -542,6 +542,8 @@ content-defined chunking), all behind opt-in extras.
 
 ## Docs
 
+- [Interactive architecture map](docs/architecture/index.html) — evidence-linked runtime
+  flow in a fully offline viewer.
 - [docs/QUICKSTART.md](docs/QUICKSTART.md) — the `keygen → publish → sync → route` loop as a
   standalone walkthrough, with the measured time and disk cost up front.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system context, bundle lifecycle, CAS +
