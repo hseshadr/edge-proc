@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "EdgeProc: Signed Updates to Local Inference",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "viewBox": [1380, 650],
+    "repository": {
+      "url": "https://github.com/hseshadr/edge-proc",
+      "revision": "b97177b98e1ed41b904752b166b4dc1202185a7c"
+    },
+    "views": [
+      {"id": "trusted-update", "label": "Trusted update", "focus": ["publisher", "origin", "trust-key", "sync", "snapshot"], "note": "Follow a signed, content-addressed bundle from build time to an atomically promoted local snapshot."},
+      {"id": "local-runtime", "label": "Local runtime", "focus": ["snapshot", "router", "localvec"], "note": "See how a deterministic router executes embed, search, and rank without query egress."},
+      {"id": "trust-boundary", "label": "Trust boundary", "focus": ["origin", "trust-key", "sync"], "note": "The transport is untrusted; the pinned key and content hashes re-establish trust on device."}
+    ]
+  },
+  "components": [
+    {"id": "publisher", "type": "external", "label": "Bundle Publisher", "sublabel": "GearCDC + zstd + Ed25519", "pos": [20, 420], "size": [170, 72], "sources": [{"path": "edgeproc/bundles/publish.py", "line": 40, "end_line": 98, "label": "signed bundle build"}, {"path": "edgeproc/cli/app.py", "line": 159, "end_line": 204, "label": "publish entrypoint"}]},
+    {"id": "origin", "type": "cloud", "label": "Content Store", "sublabel": "pointer / manifest / chunks", "pos": [250, 420], "size": [170, 72], "sources": [{"path": "edgeproc/bundles/publish.py", "line": 141, "end_line": 160, "label": "flat origin layout"}]},
+    {"id": "sync", "type": "security", "label": "Sync Verifier", "sublabel": "fail closed on every layer", "pos": [480, 420], "size": [170, 72], "sources": [{"path": "edgeproc/bundles/sync.py", "line": 185, "end_line": 237, "label": "verify and promote"}, {"path": "edgeproc/bundles/sync.py", "line": 115, "end_line": 175, "label": "hash and chunk checks"}]},
+    {"id": "snapshot", "type": "database", "label": "Active Snapshot", "sublabel": "verified local model + index", "pos": [710, 420], "size": [170, 72], "sources": [{"path": "edgeproc/bundles/sync.py", "line": 227, "end_line": 244, "label": "atomic promotion"}]},
+    {"id": "router", "type": "backend", "label": "Deterministic Router", "sublabel": "first accepting runtime", "pos": [940, 420], "size": [170, 72], "sources": [{"path": "edgeproc/core/router.py", "line": 17, "end_line": 24, "label": "pure routing policy"}]},
+    {"id": "localvec", "type": "backend", "label": "LocalVec Runtime", "sublabel": "embed / search / hybrid rank", "pos": [1170, 420], "size": [170, 72], "sources": [{"path": "edgeproc/localvec/runtime.py", "line": 40, "end_line": 96, "label": "runtime boundary"}, {"path": "edgeproc/localvec/runtime.py", "line": 98, "end_line": 146, "label": "local execution"}]},
+    {"id": "trust-key", "type": "security", "label": "Pinned Public Key", "sublabel": "device root of trust", "pos": [480, 65], "size": [170, 72], "sources": [{"path": "edgeproc/bundles/signing.py", "line": 45, "end_line": 65, "label": "verification contract"}, {"path": "edgeproc/bundles/signing.py", "line": 88, "end_line": 102, "label": "Ed25519 verifier"}]}
+  ],
+  "connections": [
+    {"id": "publish", "from": "publisher", "to": "origin", "label": "publish", "variant": "emphasis", "labelAt": [220, 385]},
+    {"id": "fetch", "from": "origin", "to": "sync", "label": "fetch delta", "variant": "emphasis", "labelAt": [450, 385]},
+    {"id": "promote", "from": "sync", "to": "snapshot", "label": "promote", "variant": "security", "labelAt": [680, 385]},
+    {"id": "route", "from": "snapshot", "to": "router", "label": "load assets", "variant": "emphasis", "labelAt": [910, 385]},
+    {"id": "execute", "from": "router", "to": "localvec", "label": "dispatch", "variant": "emphasis", "labelAt": [1140, 385]},
+    {"id": "verify", "from": "trust-key", "to": "sync", "label": "verify signature", "variant": "security", "fromSide": "bottom", "toSide": "top", "route": "straight", "labelAt": [565, 280]}
+  ],
+  "cards": [
+    {"dot": "rose", "title": "Untrusted transport", "items": ["The origin only serves immutable bytes", "Trust is restored on device with signatures and hashes"]},
+    {"dot": "cyan", "title": "Efficient updates", "items": ["GearCDC keeps unchanged content reusable", "Sync fetches only missing compressed chunks"]},
+    {"dot": "emerald", "title": "Private execution", "items": ["Routing is stable and replayable", "Queries stay inside the local runtime boundary"]}
+  ]
+}

@@ -29,6 +29,24 @@ SOURCE_EXCLUDES: Final = [
     "**/__pycache__",
     "dist",
 ]
+OSV_AUDIT_COMMAND: Final = (
+    "uv",
+    "tool",
+    "run",
+    "--from",
+    "pip-audit==2.10.0",
+    "pip-audit",
+    "-r",
+    "/work/requirements.txt",
+    "--disable-pip",
+    "--no-deps",
+    "--vulnerability-service",
+    "osv",
+    "--strict",
+    "--progress-spinner",
+    "off",
+    "--verbose",
+)
 
 
 def _foundation() -> Foundation:
@@ -68,11 +86,7 @@ class EdgeProc:
     @function
     def dependency_audit(self, commit_sha: str) -> dagger.Container:
         """Audit the locked graph through the shared Python-package Lego."""
-        return _python_package().dependency_audit(
-            source=self.source,
-            repository=REPOSITORY,
-            commit_sha=commit_sha,
-        )
+        return self._dependency_audit(self.source, commit_sha)
 
     @function
     @check
@@ -114,15 +128,12 @@ class EdgeProc:
     async def _run_ci(self, source: dagger.Directory, commit_sha: str) -> None:
         bound = await self._verified_source(source, commit_sha)
         await self._product_gate(bound).sync()
-        await (
-            _python_package()
-            .dependency_audit(
-                source=bound,
-                repository=REPOSITORY,
-                commit_sha=commit_sha,
-            )
-            .sync()
-        )
+        await self._dependency_audit(bound, commit_sha).sync()
+
+    @staticmethod
+    def _dependency_audit(source: dagger.Directory, commit_sha: str) -> dagger.Container:
+        shared = _python_package().dependency_audit(source, REPOSITORY, commit_sha)
+        return shared.with_exec(list(OSV_AUDIT_COMMAND))
 
     async def _verified_source(self, source: dagger.Directory, commit_sha: str) -> dagger.Directory:
         foundation = _foundation()
