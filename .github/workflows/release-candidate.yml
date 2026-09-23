@@ -25,7 +25,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: dagger/dagger-for-github@496f1b3d8b0d823834c13e67cf8a8e08ca3b9602 # v8.4.0
+      - uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:
@@ -34,7 +34,7 @@ jobs:
           args: >-
             release-candidate --tag=${{ inputs.tag }} --commit-sha=${{ github.sha }}
             --github-token=env:GITHUB_TOKEN export --path=release
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: edge-proc-${{ github.sha }}
           path: release/
