@@ -44,5 +44,11 @@ issue is already fixed.
   out-of-band; `sync` refuses to run without one. Reports that demonstrate trust without a
   pinned key, signature acceptance after tampering, or content-address bypass are in scope
   and prioritized.
+- Key rotation and a compromised signing key are handled by the runbook in
+  [docs/OPERATIONS.md](docs/OPERATIONS.md#key-rotation-and-compromised-key-runbook). The
+  trust root today is a single pinned Ed25519 key: there is no keyring, no revocation
+  list, and no pointer expiry (the keyring is a [roadmap](ROADMAP.md) item, not built).
+  Rotation is a coordinated re-sign plus a consumer release that ships the new public key,
+  with the pointer `sequence` still increasing so the anti-rollback floor holds.
 - Issues in third-party dependencies (e.g. `cryptography`, `faiss-cpu`) should be reported
   upstream; if EdgeProc's *use* of them is the weakness, report it here.
