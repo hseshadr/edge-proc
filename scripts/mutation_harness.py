@@ -218,9 +218,120 @@ MUTATIONS: Final[tuple[Mutation, ...]] = (
     Mutation(
         id="SY-POINTER-SIGNATURE",
         target="edgeproc/bundles/sync.py",
-        old="verifier.verify(pointer_signing_bytes(pointer), pointer.signature)",
-        new="_ = (verifier, pointer_signing_bytes)  # signature never verified",
+        old="    _verify_signature(pointer, verifier)\n    _check_expiry(",
+        new="    _ = (_verify_signature, verifier)  # signature never verified\n    _check_expiry(",
         invariant="the /latest pointer's detached signature is verified before use",
+    ),
+    Mutation(
+        id="SY-KEY-SELECTION",
+        target="edgeproc/bundles/sync.py",
+        old="verifier.verify_pointer(data, pointer.signature, pointer.key_id)",
+        new="verifier.verify_pointer(data, pointer.signature, None)",
+        invariant="a pointer's signed key_id selects its key (unknown/revoked refused by name)",
+    ),
+    Mutation(
+        id="SY-PLAIN-VERIFIER",
+        target="edgeproc/bundles/sync.py",
+        old="    else:\n        verifier.verify(data, pointer.signature)",
+        new="    else:\n        pass  # a verify-only Verifier is never consulted",
+        invariant="a verify-only Verifier still authenticates a key_id-stamped pointer",
+    ),
+    Mutation(
+        id="SY-EXPIRY-REFUSAL",
+        target="edgeproc/bundles/sync.py",
+        old='raise PointerExpiredError(f"pointer expired at',
+        new='print(f"pointer expired at',
+        invariant="a pointer past its signed expires_at is refused, never promoted",
+    ),
+    Mutation(
+        id="SY-EXPIRY-AFTER-SIGNATURE",
+        target="edgeproc/bundles/sync.py",
+        old=(
+            "    _verify_signature(pointer, verifier)\n"
+            "    _check_expiry(pointer, clock if clock is not None else time.time)\n"
+        ),
+        new=(
+            "    _check_expiry(pointer, clock if clock is not None else time.time)\n"
+            "    _verify_signature(pointer, verifier)\n"
+        ),
+        invariant="expiry is judged only after the signature: an unsigned field decides nothing",
+    ),
+    Mutation(
+        id="MF-EXPIRY-INCLUSIVE",
+        target="edgeproc/bundles/manifest.py",
+        old="now >= pointer.expires_at",
+        new="now > pointer.expires_at",
+        invariant="a pointer is already expired AT its expires_at second",
+    ),
+    Mutation(
+        id="MF-EXPIRES-INTEGRAL-ONLY",
+        target="edgeproc/bundles/manifest.py",
+        old="if isinstance(value, float) and value.is_integer():",
+        new="if isinstance(value, float):",
+        invariant="a fractional expires_at is refused, never truncated to an integer",
+    ),
+    Mutation(
+        id="MF-KEYRING-WIRE-OMIT",
+        target="edgeproc/bundles/manifest.py",
+        old="            if name in data and data[name] is None:\n                del data[name]",
+        new="            if name in data and data[name] is None:\n                pass",
+        invariant="an unstamped pointer's wire bytes stay pre-keyring (old consumers parse it)",
+    ),
+    Mutation(
+        id="SG-SINGLE-KEY-UNKNOWN",
+        target="edgeproc/bundles/signing.py",
+        old="if key_id is not None and key_id != self.key_id:",
+        new="if False:",
+        invariant="a single pinned key refuses a pointer naming a different key_id",
+    ),
+    Mutation(
+        id="KR-NAMED-REVOKED",
+        target="edgeproc/bundles/keyring.py",
+        old="        if self._ring.is_revoked(key_id):\n            raise KeyRevokedError",
+        new="        if False:\n            raise KeyRevokedError",
+        invariant="a pointer naming a revoked key is refused, whatever its signature",
+    ),
+    Mutation(
+        id="KR-UNNAMED-ACTIVE-ONLY",
+        target="edgeproc/bundles/keyring.py",
+        old="if _any_verifies(self._ring.active_keys(), data, signature):",
+        new="if _any_verifies(self._ring.keys, data, signature):",
+        invariant="an unnamed signature verifies only under a NON-revoked key",
+    ),
+    Mutation(
+        id="KR-KEY-ID-DERIVED",
+        target="edgeproc/bundles/keyring.py",
+        old="if key_id_for(bytes.fromhex(self.public_key)) != self.key_id:",
+        new="if False:",
+        invariant="a keyring entry's key_id must be the derived id of its public_key",
+    ),
+    Mutation(
+        id="KR-DUPLICATE-KEY-ID",
+        target="edgeproc/bundles/keyring.py",
+        old="if len(set(ids)) != len(ids):",
+        new="if False:",
+        invariant="a keyring holding one key_id twice is ambiguous and refused",
+    ),
+    Mutation(
+        id="KR-LAST-ACTIVE-KEY",
+        target="edgeproc/bundles/keyring.py",
+        old="if not self.active_keys():",
+        new="if False:",
+        invariant="a keyring must keep at least one non-revoked key",
+    ),
+    Mutation(
+        id="KR-LEGACY-RAW-KEY",
+        target="edgeproc/bundles/keyring.py",
+        old="if len(raw) == ED25519_PUBLIC_KEY_BYTES:",
+        new="if False:",
+        invariant="a legacy raw 32-byte public.key still loads as a keyring of one",
+    ),
+    Mutation(
+        id="CLI-STAMPING-OFF",
+        target="edgeproc/cli/app.py",
+        old="stamp = settings.publish_stamp_key_id if stamp_key_id is None else stamp_key_id",
+        new="stamp = True if stamp_key_id is None else stamp_key_id",
+        invariant="key_id stamping is opt-in: the default publish stays byte-identical",
     ),
     Mutation(
         id="SY-MANIFEST-DIGEST",

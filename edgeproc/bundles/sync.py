@@ -1,7 +1,9 @@
 """Sync a v2 signed, chunked bundle from an origin into a local cache.
 
 The substrate is fail-closed at every layer: the version pointer must verify
-under the pinned ed25519 key, the manifest must content-address to the pointer,
+under the pinned ed25519 trust root (a single key or a keyring that selects the key the
+pointer names and refuses a revoked one), a signed ``expires_at`` must not have passed,
+the manifest must content-address to the pointer,
 each chunk is verbatim-ingested into the CAS (which hashes on write), and the
 final reassembly check proves every file's chunks concat to its declared sha256.
 """
@@ -9,6 +11,8 @@ final reassembly check proves every file's chunks concat to its declared sha256.
 from __future__ import annotations
 
 import hashlib
+import time
+from collections.abc import Callable
 from typing import NamedTuple
 
 import structlog
@@ -20,9 +24,10 @@ from edgeproc.bundles.manifest import (
     FileEntry,
     IndexManifest,
     VersionPointer,
+    is_expired,
     pointer_signing_bytes,
 )
-from edgeproc.bundles.signing import Verifier
+from edgeproc.bundles.signing import PointerVerifier, Verifier
 from edgeproc.core.settings import EdgeProcSettings
 
 log = structlog.get_logger(__name__)
@@ -34,6 +39,19 @@ class SyncCapError(IntegrityError):
     Subclasses :class:`IntegrityError` — busting the resource ceiling is a trust-boundary
     refusal, so every existing ``IntegrityError`` handler already stops the sync.
     """
+
+
+class PointerExpiredError(IntegrityError):
+    """The fetched pointer's signed ``expires_at`` has passed (fail-closed).
+
+    Subclasses :class:`IntegrityError`, like :class:`~edgeproc.bundles.cas.RollbackError`:
+    a stale pointer is a freshness refusal at the trust boundary, so every existing handler
+    already stops the sync. Nothing is promoted; what is already active stays active.
+    """
+
+
+#: A clock returning Unix seconds. Injectable so tests never read the wall clock.
+Clock = Callable[[], float]
 
 
 class SyncCaps(NamedTuple):
@@ -74,16 +92,55 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _fetch_pointer(base_url: str, adapter: FetchAdapter, verifier: Verifier) -> VersionPointer:
-    """Fetch ``/latest`` and verify its detached signature (fail-closed).
+def _fetch_pointer(
+    base_url: str, adapter: FetchAdapter, verifier: Verifier, clock: Clock
+) -> VersionPointer:
+    """Fetch ``/latest``, verify its detached signature, then its expiry (fail-closed).
 
     The verified preimage is :func:`pointer_signing_bytes`, so a legacy pointer (no
     identity fields) verifies against its original signature unchanged, while a pointer
-    that binds a bundle_id/channel/sequence is authenticated together with that identity.
+    that binds a bundle_id/channel/sequence/key_id/expires_at is authenticated together
+    with them. Expiry is judged only AFTER the signature: an unsigned field decides nothing.
     """
     pointer = VersionPointer.model_validate_json(adapter.fetch_bytes(base_url + "/latest"))
-    verifier.verify(pointer_signing_bytes(pointer), pointer.signature)
+    verify_pointer(pointer, verifier, clock=clock)
     return pointer
+
+
+def verify_pointer(
+    pointer: VersionPointer, verifier: Verifier, *, clock: Clock | None = None
+) -> None:
+    """The pointer-level trust checks ``sync_index`` applies to a fetched ``/latest``.
+
+    In order: key selection + signature (a named ``key_id`` selects its key; a revoked or
+    unknown key is refused by name), then — only once the signature verified — the signed
+    ``expires_at`` against ``clock`` (Unix seconds; default :func:`time.time`, read only when
+    the pointer carries an expiry). Returns ``None`` or raises; it never promotes anything.
+    Identity pins, the manifest, chunks, and the rollback floor are checked by the sync.
+    """
+    _verify_signature(pointer, verifier)
+    _check_expiry(pointer, clock if clock is not None else time.time)
+
+
+def _verify_signature(pointer: VersionPointer, verifier: Verifier) -> None:
+    """Verify under the key the pointer names when the verifier can select keys.
+
+    A pointer without ``key_id`` takes exactly the pre-keyring call, ``verify(data,
+    signature)``, whatever the verifier is. A verifier that predates key selection
+    (``verify`` only) still authenticates a named pointer — ``key_id`` is inside the signed
+    preimage, so it cannot be forged — it just cannot report an unknown or revoked key by name.
+    """
+    data = pointer_signing_bytes(pointer)
+    if pointer.key_id is not None and isinstance(verifier, PointerVerifier):
+        verifier.verify_pointer(data, pointer.signature, pointer.key_id)
+    else:
+        verifier.verify(data, pointer.signature)
+
+
+def _check_expiry(pointer: VersionPointer, clock: Clock) -> None:
+    """Refuse a pointer whose signed ``expires_at`` has passed; never read the clock without one."""
+    if pointer.expires_at is not None and is_expired(pointer, clock()):
+        raise PointerExpiredError(f"pointer expired at {pointer.expires_at} (unix seconds)")
 
 
 def _check_identity(
@@ -192,13 +249,16 @@ def sync_index(
     expected_channel: str | None = None,
     max_total_bytes: int | None = None,
     max_files: int | None = None,
+    clock: Clock | None = None,
 ) -> SyncResult:
     """Pull a signed pointer, diff + fetch missing chunks, verify, atomically swap.
 
     ``expected_bundle_id``/``expected_channel`` (opt-in) pin the consumer to a bundle
     identity: a pointer bound to any other one is refused fail-closed. ``max_total_bytes``/
     ``max_files`` bound the aggregate a single sync will pull (disk-exhaustion defense);
-    unset, they fall back to the generous ``EdgeProcSettings`` defaults.
+    unset, they fall back to the generous ``EdgeProcSettings`` defaults. ``clock`` (Unix
+    seconds; default :func:`time.time`) judges a signed ``expires_at`` and is consulted only
+    when the pointer carries one.
     """
     with store.mutation():
         return _sync_locked(
@@ -210,6 +270,7 @@ def sync_index(
             expected_channel=expected_channel,
             max_total_bytes=max_total_bytes,
             max_files=max_files,
+            clock=clock if clock is not None else time.time,
         )
 
 
@@ -223,10 +284,11 @@ def _sync_locked(
     expected_channel: str | None,
     max_total_bytes: int | None,
     max_files: int | None,
+    clock: Clock,
 ) -> SyncResult:
     """Execute one complete fetch/verify/promote transaction under the store lock."""
     caps = _resolve_caps(max_total_bytes, max_files)
-    pointer = _fetch_pointer(base_url, adapter, verifier)
+    pointer = _fetch_pointer(base_url, adapter, verifier, clock)
     _check_identity(pointer, expected_bundle_id, expected_channel)
     manifest = _fetch_manifest(base_url, pointer, adapter, store)
     _check_manifest_identity(pointer, manifest)

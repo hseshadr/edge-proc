@@ -95,6 +95,7 @@ downloading — a fetch is something you ask for, never a fallback.
 ```bash
 uv run edgeproc keygen --out keys
 #   wrote keys/private.key and keys/public.key
+#   key_id <16 lowercase hex chars — the key's name in a keyring>
 
 mkdir -p src && cp -r catalog_idx model src/
 

@@ -48,13 +48,18 @@ def build_bundle(
     channel: str | None = None,
     sequence: int | None = None,
     bind_identity: bool = False,
+    key_id: str | None = None,
+    expires_at: int | None = None,
 ) -> VersionPointer:
     """Chunk + store ``files``, sign the manifest pointer, lay out the flat origin.
 
     ``bind_identity`` (opt-in) stamps ``bundle_id`` into the SIGNED pointer so it cannot be
     cross-applied to another bundle; ``channel``/``sequence`` bind a release channel and a
-    monotonic freshness counter. All three are excluded from the signed bytes when unset, so
-    the default call produces the byte-identical legacy pointer and no consumer is affected.
+    monotonic freshness counter. ``key_id`` names the signing key for a keyring consumer and
+    ``expires_at`` (Unix seconds) bounds how long the pointer is accepted. All are excluded
+    from the signed bytes when unset, so the default call produces the byte-identical legacy
+    pointer and no consumer is affected. Stamp ``key_id``/``expires_at`` only once every
+    consumer runs a version that knows them: an older consumer refuses unknown fields.
     """
     with store.mutation():
         return _build_bundle_locked(
@@ -67,6 +72,8 @@ def build_bundle(
             channel=channel,
             sequence=sequence,
             bind_identity=bind_identity,
+            key_id=key_id,
+            expires_at=expires_at,
         )
 
 
@@ -81,6 +88,8 @@ def _build_bundle_locked(
     channel: str | None,
     sequence: int | None,
     bind_identity: bool,
+    key_id: str | None,
+    expires_at: int | None,
 ) -> VersionPointer:
     """Build and publish one origin snapshot while holding its mutation lock."""
     entries = [_file_entry(path, data, chunker, store) for path, data in files.items()]
@@ -93,6 +102,8 @@ def _build_bundle_locked(
         bundle_id=bundle_id if bind_identity else None,
         channel=channel,
         sequence=sequence,
+        key_id=key_id,
+        expires_at=expires_at,
     )
     _lay_out_origin(store, manifest, pointer)
     return pointer
@@ -120,6 +131,8 @@ def _sign_pointer(
     bundle_id: str | None,
     channel: str | None,
     sequence: int | None,
+    key_id: str | None,
+    expires_at: int | None,
 ) -> VersionPointer:
     """Sign the (signature-excluded) pointer bytes; return the signed pointer.
 
@@ -132,6 +145,8 @@ def _sign_pointer(
         bundle_id=bundle_id,
         channel=channel,
         sequence=sequence,
+        key_id=key_id,
+        expires_at=expires_at,
         signature="",
     )
     signature = signer.sign(pointer_signing_bytes(unsigned))
