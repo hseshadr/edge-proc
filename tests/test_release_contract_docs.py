@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from packaging.version import Version
 
 ROOT_FOR_IMPORT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT_FOR_IMPORT / "benchmarks"))
@@ -12,7 +13,9 @@ sys.path.insert(0, str(ROOT_FOR_IMPORT / "benchmarks"))
 from benchmark import BUDGETS  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-RELEASE_VERSION = "0.4.1"
+RELEASE_VERSION = "0.5.0"
+#: The first edgeproc-core release with Problem Details hardening; pinned as a literal.
+CORE_FLOOR = "0.4.3"
 
 
 def _read(relative: str) -> str:
@@ -25,6 +28,27 @@ def test_installable_version_names_the_offline_contract_release() -> None:
 
     assert __version__ == RELEASE_VERSION
     assert f"## [{RELEASE_VERSION}]" in _read("CHANGELOG.md")
+
+
+def test_changelog_keeps_an_unreleased_section_above_the_current_release() -> None:
+    """Keep-a-Changelog: `[Unreleased]` is always present and always on top."""
+    changelog = _read("CHANGELOG.md")
+    released = re.findall(r"^## \[(\d+\.\d+\.\d+)\] — \d{4}-\d{2}-\d{2}$", changelog, re.MULTILINE)
+    assert released[0] == RELEASE_VERSION
+    assert changelog.index("## [Unreleased]") < changelog.index(f"## [{RELEASE_VERSION}]")
+
+
+def test_citation_names_the_current_release() -> None:
+    assert f"\nversion: {RELEASE_VERSION}\n" in _read("CITATION.cff")
+
+
+def test_release_notes_tell_single_key_consumers_nothing_changes() -> None:
+    """The minor bump adds the keyring; an existing raw `public.key` must keep working."""
+    section = _read("CHANGELOG.md").split(f"## [{RELEASE_VERSION}]", maxsplit=1)[1]
+    section = " ".join(section.split("\n## [", maxsplit=1)[0].split())
+    assert "### Upgrading" in section
+    assert "raw 32-byte `public.key`" in section
+    assert f"`edgeproc-core>={CORE_FLOOR}`" in section
 
 
 def test_package_publish_requires_a_fresh_manual_dispatch() -> None:
@@ -68,7 +92,7 @@ def test_release_copy_stays_true_before_and_after_registry_propagation() -> None
     readme = _read("README.md")
     workflow = _read(".github/workflows/publish.yml")
 
-    assert "This README documents EdgeProc 0.4.1" in readme
+    assert f"This README documents EdgeProc {RELEASE_VERSION}" in readme
     assert "PyPI currently serves" not in readme
     assert "edge-proc is not yet on PyPI" not in workflow
 
@@ -82,7 +106,7 @@ def test_corrective_release_marks_the_affected_version_superseded() -> None:
 def test_roadmap_never_lists_the_live_pypi_distribution_as_future_work() -> None:
     roadmap = _read("ROADMAP.md")
     near_term = roadmap.split("## Near-term", maxsplit=1)[1].split("## Out of scope", maxsplit=1)[0]
-    assert "## Shipped (v0.4.1)" in roadmap
+    assert f"## Shipped (v{RELEASE_VERSION})" in roadmap
     assert "EdgeProc currently installs from source / git" not in roadmap
     assert "**PyPI distribution**" not in near_term
 
@@ -94,21 +118,30 @@ def test_contributor_guide_names_the_real_registry_dependency_source() -> None:
 
 
 def test_core_dependency_floor_excludes_superseded_releases() -> None:
-    assert '"edgeproc-core>=0.4.2"' in _read("pyproject.toml")
-    assert "`edgeproc-core>=0.4.2`" in _read("README.md")
+    assert f'"edgeproc-core>={CORE_FLOOR}"' in _read("pyproject.toml")
+    assert f"`edgeproc-core>={CORE_FLOOR}`" in _read("README.md")
 
 
 def test_security_policy_supports_only_the_current_release() -> None:
     policy = _read("SECURITY.md")
-    assert "| 0.4.1   | :white_check_mark: |" in policy
-    assert "| < 0.4.1 | :x:                |" in policy
+    assert f"| {RELEASE_VERSION}   | :white_check_mark: |" in policy
+    assert f"| < {RELEASE_VERSION} | :x:                |" in policy
     assert "| 0.1.x" not in policy
 
 
 def test_dagger_installs_core_from_the_locked_pypi_graph() -> None:
     graph = _read(".dagger/src/edge_proc/main.py")
     assert '"uv", "sync", "--frozen", "--all-extras"' in graph
-    assert '"edgeproc-core>=0.4.2"' in _read("pyproject.toml")
+    assert f'"edgeproc-core>={CORE_FLOOR}"' in _read("pyproject.toml")
+
+
+def test_lockfile_resolves_a_supported_core_release() -> None:
+    """The committed graph CI installs must itself clear the declared core floor."""
+    lock = _read("uv.lock")
+    assert f'{{ name = "edgeproc-core", specifier = ">={CORE_FLOOR}" }}' in lock
+    locked = re.search(r'^name = "edgeproc-core"\nversion = "([^"]+)"$', lock, re.MULTILINE)
+    assert locked is not None
+    assert Version(locked.group(1)) >= Version(CORE_FLOOR)
 
 
 def test_quickstart_does_not_freeze_a_stale_test_count() -> None:
@@ -404,7 +437,7 @@ def test_operations_contract_has_an_honest_key_rotation_runbook() -> None:
 
 def test_roadmap_lists_the_keyring_as_shipped_and_nothing_it_did_not_ship() -> None:
     roadmap = _read("ROADMAP.md")
-    shipped = roadmap.split("## Shipped on `main` (unreleased)", 1)[1].split("\n## ", 1)[0]
+    shipped = roadmap.split(f"## Shipped (v{RELEASE_VERSION})", 1)[1].split("\n## ", 1)[0]
     assert "Trust-root keyring" in shipped
     assert "no remotely fetched, signed revocation" in shipped
     near_term = roadmap.split("## Near-term", 1)[1].split("\n## ", 1)[0]

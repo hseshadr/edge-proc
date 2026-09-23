@@ -39,8 +39,8 @@ output: synced v1.0.0 manifest=71d733a8dddb chunks_fetched=1 chunks_reused=0 byt
   small dependencies; on-device search adds FAISS and PyTorch (about a 950 MB install).
 - **Not for** — A hosted service (there is nothing to sign up for; it is a library your app
   embeds). Not a two-way folder sync like Dropbox: one publisher signs, many devices read.
-- **Status** — Beta: v0.4.1 (pre-1.0) on PyPI; `main` also carries an unreleased key-rotation
-  keyring. See [CHANGELOG](CHANGELOG.md).
+- **Status** — Beta (pre-1.0). This README documents v0.5.0, which adds the key-rotation
+  keyring; released versions and dates are in the [CHANGELOG](CHANGELOG.md).
 
 ## Try it in 60 seconds
 
@@ -68,6 +68,7 @@ edgeproc sync --base-url origin --cache-dir new-device --key keys/public.key --p
 
 ```text
 wrote keys/private.key and keys/public.key
+key_id 9a8763e7c7fe05a1
 published v1.0.0 manifest=71d733a8dddb
 synced v1.0.0 manifest=71d733a8dddb chunks_fetched=1 chunks_reused=0 bytes_fetched=70
 {"p1": "red running shoes", "p2": "waterproof hiking boots"}
@@ -82,8 +83,8 @@ the signature and every piece, then wrote the catalog to `device/`. After you ad
 the second `sync` downloaded only that new piece (27 bytes) and reused the rest. When a piece
 on the server was corrupted, a fresh device refused the whole release and exited with an
 error; it never got an `active` version to serve. No network was used — `origin/` is a local
-folder. Output from edge-proc 0.4.1 installed from PyPI; the manifest hashes repeat on every
-run. (Unreleased `main` also prints the new key's `key_id` after `keygen`.)
+folder. Output from edge-proc 0.5.0; the manifest hashes repeat on every run, while the
+`key_id` line names your freshly generated key, so yours will differ.
 
 More runnable examples: [`examples/`](examples/) — `bash examples/run_loop.sh` runs the whole
 path including on-device search (its first run downloads an 87 MB search model on the
@@ -212,8 +213,8 @@ or IoT box that needs fast local search without standing up a backend.
   (`EDGEPROC_MODEL_DIGEST`).
 - **Refuses rather than warns:** no trust root means `sync` refuses to run; a bad signature, a
   tampered piece, or a rolled-back pointer stops the sync with a non-zero exit and nothing is
-  promoted; on `main`, so do an expired pointer and a revoked key. With no local model, search refuses instead of
-  downloading one.
+  promoted, and so do an expired pointer and a revoked key. With no local model, search refuses
+  instead of downloading one.
 - **Not protected:** a compromised device or build machine, a stolen private key before you
   revoke it (revocation takes effect when you update each device's pinned keyring — there is
   no remotely fetched revocation list), and what your own app does with the data after it is
@@ -221,7 +222,7 @@ or IoT box that needs fast local search without standing up a backend.
   [below](#the-typed-result-and-the-taskbudget-model)).
 - **Verify a release:** PyPI releases are published from CI with
   [PEP 740](https://peps.python.org/pep-0740/) provenance. Check a wheel with
-  `pip install pypi-attestations && pypi-attestations verify pypi --repository https://github.com/hseshadr/edge-proc pypi:edge_proc-0.4.1-py3-none-any.whl`.
+  `pip install pypi-attestations && pypi-attestations verify pypi --repository https://github.com/hseshadr/edge-proc pypi:edge_proc-0.5.0-py3-none-any.whl`.
   The release procedure is in [docs/OPERATIONS.md](docs/OPERATIONS.md#release-evidence).
 
 See [SECURITY.md](SECURITY.md) for reporting a vulnerability. The threat model, recovery
@@ -242,7 +243,7 @@ one — exactly the single-key behavior) or a JSON keyring of several keys plus 
 list. A pointer can name the key that signed it (`publish --stamp-key-id`) and carry a signed
 expiry (`publish --expires-in 7d`); a revoked key never verifies, an unknown one is refused,
 and an expired pointer is refused after its signature checks out. The `sequence` rollback
-floor holds across keys. The keyring is on `main` and not yet in a tagged release.
+floor holds across keys. The keyring ships in 0.5.0.
 
 ```bash
 uv run edgeproc keyring init keys/public.key new-keys/public.key --out keyring.json
@@ -296,7 +297,7 @@ uv sync --all-extras   # core + extras + dev tooling
 ```
 
 That Just Works — `edgeproc-core` resolves from
-[PyPI](https://pypi.org/project/edgeproc-core/) (`edgeproc-core>=0.4.2`, the supported
+[PyPI](https://pypi.org/project/edgeproc-core/) (`edgeproc-core>=0.4.3`, the supported
 core line), so `uv sync` fetches
 everything; nothing else to clone. Co-developing `edgeproc-core` alongside
 EdgeProc? Clone it next to this repo and add the path override commented in
@@ -307,7 +308,7 @@ up for. The core is tiny; the heavy machinery (FAISS, sync) is opt-in behind ext
 on [`edgeproc-core`](https://github.com/hseshadr/edgeproc-core): the FAISS index here
 is a concrete implementation of that library's `VectorIndex` Protocol.
 
-**Artifact status:** This README documents EdgeProc 0.4.1. The
+**Artifact status:** This README documents EdgeProc 0.5.0. The
 [PyPI project](https://pypi.org/project/edge-proc/) is the source of truth for versions
 available from the registry; the [changelog](CHANGELOG.md) separates shipped behavior
 from unreleased work.
@@ -729,10 +730,10 @@ documents is a number that will eventually disagree with itself.
 
 ## Limitations & roadmap
 
-**Shipped (v0.4.1):** a deterministic non-AI router, a FAISS-backed local-vector runtime
+**Shipped (v0.5.0):** a deterministic non-AI router, a FAISS-backed local-vector runtime
 (`EMBED` / `SEARCH` / `RANK`), and a content-addressed, signed-bundle sync substrate (pinned
-ed25519 + content-defined chunking), all behind opt-in extras. **On `main`, not yet in a
-tagged release:** the trust-root keyring (`key_id`, revocation, pointer expiry).
+ed25519 + content-defined chunking), all behind opt-in extras, plus the trust-root keyring
+(`key_id`, revocation, pointer expiry).
 
 **Planned (not shipped)** — kept as Protocol seams, not in v0; see [ROADMAP.md](ROADMAP.md):
 

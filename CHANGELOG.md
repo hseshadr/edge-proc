@@ -4,6 +4,37 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-09-23
+
+This minor release adds a trust-root keyring, so a publisher can rotate or revoke its
+signing key without a hard cutover, and makes pointer expiry available. It is additive:
+a consumer that pins a raw `public.key` and a publisher that does not opt into stamping
+behave exactly as on 0.4.1, and every pointer they exchange is byte-identical. It also
+raises the `edgeproc-core` floor to 0.4.3 and hardens the manual release workflow.
+
+### Upgrading
+
+- **Nothing to change for existing single-key deployments.** A raw 32-byte `public.key`
+  trust root keeps working unchanged through `EDGEPROC_TRUST_ROOT_PUBKEY_PATH` or
+  `sync --key`: it loads as a keyring of one and verifies exactly as before.
+- **Pointers are unchanged unless you opt in.** `key_id` and `expires_at` are optional.
+  When they are unset, the signing preimage, the signature, and the published `latest`
+  bytes are byte-identical to 0.4.1 output (pinned by
+  `tests/bundles/test_pointer_keyring.py` and re-checked against the v0.4.1 sources for
+  this release). So a 0.5.0 consumer syncs a 0.4.x publisher's bundles, and a 0.4.x
+  consumer keeps syncing a 0.5.0 publisher that leaves stamping off (the default).
+- **Upgrade every consumer before you turn stamping on.** `publish --stamp-key-id`,
+  `publish --expires-in`, `EDGEPROC_PUBLISH_STAMP_KEY_ID`, and
+  `EDGEPROC_PUBLISH_EXPIRES_IN` add signed fields that a 0.4.x consumer refuses. The order
+  is in the key rotation runbook in `docs/OPERATIONS.md`.
+- **`edgeproc keygen` prints a second line** (`key_id <16 hex chars>`). A script that parses
+  its output should read only the first line, or match on the `wrote` prefix.
+- **`edgeproc publish` now validates `EDGEPROC_*` settings.** A malformed value that
+  `publish` used to ignore is now refused as `config.invalid`, the same way `sync` already
+  handled it.
+- **`edgeproc-core>=0.4.3` is now required**, so installing 0.5.0 upgrades an older core.
+  No code change is needed; see *Security* below for why the floor moved.
+
 ### Added
 
 - **Trust-root keyring.** `EDGEPROC_TRUST_ROOT_PUBKEY_PATH` / `sync --key` now accept a
@@ -56,17 +87,57 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
   promoted; the active bundle keeps serving.
 - The `sequence` rollback floor is unchanged and holds across key changes: an old key's
   pointer replayed during a rotation overlap is refused as a rollback.
+- **The `edgeproc-core` floor is now 0.4.3.** `edgeproc.errors.problem_details_for(error,
+  params)` renders through core's `to_problem_details`. Before 0.4.3, caller params could
+  put reserved RFC 9457 members (`status`, `detail`, `instance`) on the wire, along with
+  `__proto__`, non-scalar or non-finite values, and a `str`-subclass key that forged
+  `status` and a duplicate `type`. 0.4.3 keeps only wire-safe members, so edge-proc now
+  refuses to install with a core that lacks that fix.
+- **The manual release workflow no longer pastes the dispatched tag into shell text.**
+  `release-candidate.yml` passed `--tag=${{ inputs.tag }}` in the `args` of
+  `dagger/dagger-for-github`, which interpolates `args` into bash unquoted. A crafted
+  `workflow_dispatch` tag could therefore run commands on the runner and upload its own
+  wheel for `publish.yml` to publish. The tag now reaches shell only as the `TAG`
+  environment variable. A separate step rejects anything but a plain `vX.Y.Z` before any
+  other shell runs, the pinned action only installs the Dagger CLI, and the release call
+  runs in a `run:` step with every value quoted. `tests/test_workflow_security.py` now
+  fails if any workflow pastes a `${{ inputs.* }}`, `${{ github.event.* }}`, or
+  `${{ github.head_ref }}` expression into a `run:` body or a Dagger action input. It also
+  runs the tag guard against injection payloads. `publish.yml` was already shell-free and
+  names its upload directory explicitly (`packages-dir: release/dist`).
+- **The locked `anyio` moved from 4.13.0 to 4.14.2** (#71), which clears CVE-2026-63374
+  (GHSA-82r6-8w77-94w6, TLS hostname checks for internationalized domain names) and
+  CVE-2026-64847 (GHSA-5p39-cfhj-2xmp, an undrained process-pool stderr pipe). `anyio`
+  reaches edge-proc only through `httpx` in the `[bundles]` extra, and edge-proc declares
+  no `anyio` floor of its own. This bump therefore protects the committed lock that CI,
+  the release build, and `uv sync` users install. A pip install resolves `anyio` itself,
+  so upgrade it to 4.14.2 or later there.
 
 ### Changed
 
 - `edgeproc publish` now reads `EdgeProcSettings` for its stamping defaults, so a malformed
   `EDGEPROC_*` value in the environment is refused as `config.invalid` instead of being
   ignored by `publish` (as `sync` already did).
-- The README follows the portfolio template: a plain-language first screen, a runnable
-  offline example with its real output, and an "At a glance" summary. The package
-  description is now that tagline, and the classifier is `Development Status :: 4 - Beta`.
-  `tests/test_readme_contract.py` pins the first screen, and the source archive now ships
-  the files the README links to (`CONTRIBUTING.md`, `.github/ISSUE_TEMPLATE/`).
+- The README was rewritten (#73) to follow the portfolio template: a plain-language first
+  screen, a runnable offline example with its real output, and an "At a glance" summary.
+  The package description is now that tagline, and the classifier is `Development Status
+  :: 4 - Beta`. `tests/test_readme_contract.py` pins the first screen, and the source
+  archive now ships the files the README links to (`CONTRIBUTING.md`,
+  `.github/ISSUE_TEMPLATE/`).
+- **CI and releases run through one Dagger graph** (#54, #58, #61, #62). Pull requests and
+  `main` call the same graph that `poe gate` mirrors. A release candidate still needs a
+  fresh manual `workflow_dispatch`, and it now also needs an existing `vX.Y.Z` tag that
+  names the exact current, green `main` commit and matches the package version and the top
+  released CHANGELOG entry. The OIDC publish job stays source-free and shell-free
+  (`docs/OPERATIONS.md#release-evidence`).
+- An interactive, fully offline architecture map (`docs/architecture/index.html`) is linked
+  from the README (#67). The dependency audit now also covers wheels from outside PyPI
+  (the CPU `torch` index) through OSV, and the locked `transformers` moved from 5.9.0 to
+  5.10.1 to clear the advisory that audit reported (#67).
+- Routine dependency refresh of the committed lock (#70, 14 updates in the `python-deps`
+  group) and of the pinned CI actions (#69).
+- `ROADMAP.md` and the README now describe the keyring as shipped in 0.5.0, and
+  `SECURITY.md` supports 0.5.0 only.
 
 ## [0.4.1] — 2026-08-13
 

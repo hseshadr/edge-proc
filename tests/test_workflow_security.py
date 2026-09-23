@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -98,24 +100,154 @@ def test_should_route_scheduled_dependency_audit_with_exact_caller_identity() ->
     )
 
 
+#: The only shape a dispatched release tag may take before any shell sees it.
+TAG_GUARD = '[[ "$TAG" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]] || exit 1'
+
+#: The release invocation: every value is a quoted environment variable, never an
+#: expression GitHub pastes into the script text.
+RELEASE_CALL = (
+    'dagger --progress plain call release-candidate --tag="$TAG" '
+    '--commit-sha="$GITHUB_SHA" --github-token=env:GITHUB_TOKEN export --path=release'
+)
+
+#: Expression contexts an outside actor can shape: dispatch inputs, event payloads
+#: (issue titles, PR bodies, branch names), and the PR head ref.
+UNTRUSTED_EXPRESSION = re.compile(r"\$\{\{[^}]*\b(?:inputs\.|github\.event\.|github\.head_ref)")
+
+
+def _shell_sinks(step: Mapping[str, object]) -> list[str]:
+    """Text GitHub pastes into a shell: ``run`` bodies and every Dagger action input.
+
+    `dagger/dagger-for-github` is a composite action that interpolates its inputs
+    (``args`` included) into its own bash steps unquoted, so each of its ``with``
+    values is shell text too.
+    """
+    sinks = [str(step["run"])] if "run" in step else []
+    if _action(step) == DAGGER_ACTION:
+        sinks.extend(str(value) for value in _mapping(step.get("with")).values())
+    return sinks
+
+
+def _injectable_sinks(directory: Path) -> list[str]:
+    return [
+        f"{path.name}: {sink}"
+        for path in _workflow_files(directory)
+        for job in _mapping(_mapping(yaml.safe_load(path.read_text())).get("jobs")).values()
+        for step in _steps(_mapping(job))
+        for sink in _shell_sinks(step)
+        if UNTRUSTED_EXPRESSION.search(sink)
+    ]
+
+
+def _run_tag_guard(script: str, tag: str) -> int:
+    bash = shutil.which("bash")
+    assert bash is not None
+    result = subprocess.run(  # noqa: S603
+        [bash, "-c", script], env={"TAG": tag}, capture_output=True, check=False
+    )
+    return result.returncode
+
+
 def test_should_make_release_manual_and_dagger_proven() -> None:
     document = _workflow("release-candidate.yml")
     triggers = _mapping(document.get("on"))
     candidate = _job(document, "candidate")
     steps = _steps(candidate)
     assert set(triggers) == {"workflow_dispatch"}
-    assert [_action(step) for step in steps] == [CHECKOUT_ACTION, DAGGER_ACTION, UPLOAD_ACTION]
-    assert all(PINNED.fullmatch(str(step.get("uses"))) for step in steps)
-    invocation = _mapping(steps[1].get("with"))
-    assert invocation.get("verb") == "call"
-    assert str(invocation.get("args", "")).startswith("release-candidate ")
-    assert "--commit-sha=${{ github.sha }}" in str(invocation.get("args"))
-    assert "--workflow-run-id" not in str(invocation.get("args"))
-    assert "--run-attempt" not in str(invocation.get("args"))
-    assert "--github-token=env:GITHUB_TOKEN" in str(invocation.get("args"))
-    assert "export --path=release" in str(invocation.get("args"))
-    upload = _mapping(steps[2].get("with"))
+    assert [_action(step) for step in steps] == [
+        CHECKOUT_ACTION,
+        "",
+        DAGGER_ACTION,
+        "",
+        UPLOAD_ACTION,
+    ]
+    assert all(PINNED.fullmatch(str(step.get("uses"))) for step in steps if "uses" in step)
+    checkout = _mapping(steps[0].get("with"))
+    assert "ref" not in checkout
+    assert "--workflow-run-id" not in RELEASE_CALL
+    assert "--run-attempt" not in RELEASE_CALL
+    upload = _mapping(steps[4].get("with"))
     assert upload.get("name") == "edge-proc-${{ github.sha }}"
+
+
+def test_should_validate_the_dispatched_tag_before_any_other_shell_runs() -> None:
+    # Given the release workflow
+    steps = _steps(_job(_workflow("release-candidate.yml"), "candidate"))
+    guard = steps[1]
+    # Then the tag arrives only through the environment and is checked on its own
+    assert _mapping(guard.get("env")) == {"TAG": "${{ inputs.tag }}"}
+    assert guard.get("shell") == "bash"
+    assert str(guard.get("run")).strip() == TAG_GUARD
+
+
+def test_should_install_dagger_with_the_pinned_action_but_never_let_it_run_args() -> None:
+    # Given the Dagger step of the release workflow
+    install = _steps(_job(_workflow("release-candidate.yml"), "candidate"))[2]
+    # Then the action only installs the pinned CLI: it receives no command text
+    assert _mapping(install.get("with")) == {"version": "0.21.8"}
+    assert "env" not in install
+
+
+def test_should_call_the_release_graph_with_only_quoted_environment_values() -> None:
+    # Given the release invocation step
+    release = _steps(_job(_workflow("release-candidate.yml"), "candidate"))[3]
+    # Then the tag is the validated environment value and nothing is interpolated
+    assert _mapping(release.get("env")) == {
+        "TAG": "${{ inputs.tag }}",
+        "GITHUB_TOKEN": "${{ github.token }}",
+    }
+    assert release.get("shell") == "bash"
+    assert str(release.get("run")).strip() == RELEASE_CALL
+    assert "${{" not in str(release.get("run"))
+
+
+@pytest.mark.parametrize("tag", ["v0.5.0", "v10.20.30"])
+def test_should_accept_a_plain_semver_release_tag(tag: str) -> None:
+    assert _run_tag_guard(TAG_GUARD, tag) == 0
+
+
+@pytest.mark.parametrize(
+    "tag",
+    [
+        "",
+        "0.5.0",
+        "v0.5",
+        "v0.5.0-rc1",
+        "v0.5.0 --commit-sha=0",
+        "v0.5.0;touch pwned",
+        "$(touch pwned)",
+        "`touch pwned`",
+        "v0.5.0\ntouch pwned",
+        "v0.5.0\n",
+    ],
+)
+def test_should_reject_any_tag_that_is_not_a_plain_semver_release(tag: str) -> None:
+    assert _run_tag_guard(TAG_GUARD, tag) != 0
+
+
+def test_should_keep_untrusted_expressions_out_of_every_workflow_shell() -> None:
+    # Given every workflow in the repository
+    # Then no dispatch input or event payload is pasted into shell text
+    assert _injectable_sinks(WORKFLOWS) == []
+
+
+def test_should_flag_an_input_pasted_into_a_run_or_dagger_args(tmp_path: Path) -> None:
+    # Given the pre-fix release shape and a raw run-step interpolation
+    (tmp_path / "bad.yml").write_text(
+        "jobs:\n"
+        "  bad:\n"
+        "    steps:\n"
+        "      - run: echo ${{ github.event.pull_request.title }}\n"
+        "      - uses: dagger/dagger-for-github@" + "0" * 40 + "\n"
+        "        with:\n"
+        "          args: release-candidate --tag=${{ inputs.tag }}\n",
+        encoding="utf-8",
+    )
+    # Then the audit reports both sinks
+    assert _injectable_sinks(tmp_path) == [
+        "bad.yml: echo ${{ github.event.pull_request.title }}",
+        "bad.yml: release-candidate --tag=${{ inputs.tag }}",
+    ]
 
 
 def test_should_keep_oidc_publisher_source_free_and_shell_free() -> None:
