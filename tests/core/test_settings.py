@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from edgeproc.core.settings import DEFAULT_MODEL, EdgeProcSettings
+from edgeproc.core.settings import DEFAULT_MODEL, EdgeProcSettings, parse_duration
 
 _VARS = (
     "EDGEPROC_MODEL_NAME",
@@ -16,6 +16,8 @@ _VARS = (
     "EDGEPROC_TASK_BUDGET_MEMORY_MB",
     "EDGEPROC_MAX_IN_FLIGHT_MEMORY_MB",
     "EDGEPROC_RRF_K_WINDOW",
+    "EDGEPROC_PUBLISH_STAMP_KEY_ID",
+    "EDGEPROC_PUBLISH_EXPIRES_IN",
     "HF_TOKEN",
 )
 
@@ -92,3 +94,58 @@ def test_env_example_documents_every_settings_field() -> None:
         if (field.validation_alias or f"EDGEPROC_{name}".upper()) not in example
     ]
     assert missing == [], f".env.example does not mention: {missing}"
+
+
+def test_publish_stamping_is_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Stamping key_id/expires_at is opt-in: an older consumer's pointer model forbids
+    # unknown fields, so the default publish must stay byte-identical to the legacy one.
+    for var in _VARS:
+        monkeypatch.delenv(var, raising=False)
+    settings = EdgeProcSettings(_env_file=None)
+    assert settings.publish_stamp_key_id is False
+    assert settings.publish_expires_in is None
+
+
+def test_publish_stamping_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EDGEPROC_PUBLISH_STAMP_KEY_ID", "1")
+    monkeypatch.setenv("EDGEPROC_PUBLISH_EXPIRES_IN", "2w")
+    settings = EdgeProcSettings(_env_file=None)
+    assert settings.publish_stamp_key_id is True
+    assert settings.publish_expires_in == 14 * 86_400
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "soon", "1.5d", "", "10y", "0d"])
+def test_publish_expires_in_setting_refuses_a_malformed_duration(
+    monkeypatch: pytest.MonkeyPatch, bad: str
+) -> None:
+    monkeypatch.setenv("EDGEPROC_PUBLISH_EXPIRES_IN", bad)
+    with pytest.raises(ValueError):  # noqa: PT011 - pydantic ValidationError IS a ValueError
+        EdgeProcSettings(_env_file=None)
+
+
+@pytest.mark.parametrize(
+    ("text", "seconds"),
+    [
+        ("1", 1),
+        ("3600", 3600),
+        ("90s", 90),
+        ("30m", 1800),
+        ("12h", 43_200),
+        ("7d", 604_800),
+        ("2w", 1_209_600),
+        (" 5m ", 300),
+    ],
+)
+def test_parse_duration_accepts_seconds_or_a_unit_suffix(text: str, seconds: int) -> None:
+    assert parse_duration(text) == seconds
+
+
+@pytest.mark.parametrize("bad", ["0", "0s", "-1", "1.5h", "h", "", "7D", "1e3", "5 m", "९"])
+def test_parse_duration_refuses_anything_else(bad: str) -> None:
+    with pytest.raises(ValueError, match="duration"):
+        parse_duration(bad)
+
+
+def test_parse_duration_refuses_an_expiry_beyond_the_json_safe_range() -> None:
+    with pytest.raises(ValueError, match="duration"):
+        parse_duration(str(2**53))

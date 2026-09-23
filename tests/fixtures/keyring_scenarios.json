@@ -1,0 +1,300 @@
+{
+  "cases": [
+    {
+      "expected": "signature_error",
+      "floor": null,
+      "now": 1767225599,
+      "pointer": "a",
+      "ring": "b_revoked_a"
+    },
+    {
+      "expected": "key_revoked",
+      "floor": null,
+      "now": 1767225599,
+      "pointer": "b",
+      "ring": "b_revoked_a"
+    },
+    {
+      "expected": "ok",
+      "floor": null,
+      "now": 1767225600,
+      "pointer": "c",
+      "ring": "b_revoked_a"
+    },
+    {
+      "expected": "ok",
+      "floor": null,
+      "now": 1767225599,
+      "pointer": "d",
+      "ring": "b_revoked_a"
+    },
+    {
+      "expected": "expired",
+      "floor": null,
+      "now": 1767225600,
+      "pointer": "d",
+      "ring": "b_revoked_a"
+    },
+    {
+      "expected": "key_revoked",
+      "floor": null,
+      "now": 1767225599,
+      "pointer": "a",
+      "ring": "b_revoked_a_listed"
+    },
+    {
+      "expected": "key_revoked",
+      "floor": null,
+      "now": 1767225600,
+      "pointer": "b",
+      "ring": "b_revoked_a_listed"
+    },
+    {
+      "expected": "ok",
+      "floor": null,
+      "now": 1767225599,
+      "pointer": "c",
+      "ring": "b_revoked_a_listed"
+    },
+    {
+      "expected": "expired",
+      "floor": null,
+      "now": 1767225600,
+      "pointer": "d",
+      "ring": "b_revoked_a_listed"
+    },
+    {
+      "expected": "rollback",
+      "floor": "d",
+      "now": 1767225599,
+      "pointer": "c",
+      "ring": "b_revoked_a"
+    },
+    {
+      "expected": "ok",
+      "floor": "c",
+      "now": 1767225599,
+      "pointer": "d",
+      "ring": "b_revoked_a"
+    },
+    {
+      "expected": "ok",
+      "floor": null,
+      "now": 1767225599,
+      "pointer": "a",
+      "ring": "ab"
+    },
+    {
+      "expected": "ok",
+      "floor": null,
+      "now": 1767225599,
+      "pointer": "b",
+      "ring": "ab"
+    },
+    {
+      "expected": "ok",
+      "floor": null,
+      "now": 1767225599,
+      "pointer": "c",
+      "ring": "ab"
+    },
+    {
+      "expected": "ok",
+      "floor": null,
+      "now": 1767225599,
+      "pointer": "d",
+      "ring": "ab"
+    },
+    {
+      "expected": "expired",
+      "floor": null,
+      "now": 1767225600,
+      "pointer": "d",
+      "ring": "ab"
+    },
+    {
+      "expected": "rollback",
+      "floor": "c",
+      "now": 1767225599,
+      "pointer": "a",
+      "ring": "ab"
+    },
+    {
+      "expected": "ok",
+      "floor": "a",
+      "now": 1767225599,
+      "pointer": "c",
+      "ring": "ab"
+    },
+    {
+      "expected": "ok",
+      "floor": null,
+      "now": 1767225599,
+      "pointer": "a",
+      "ring": "a_only"
+    },
+    {
+      "expected": "ok",
+      "floor": null,
+      "now": 1767225599,
+      "pointer": "b",
+      "ring": "a_only"
+    },
+    {
+      "expected": "unknown_key",
+      "floor": null,
+      "now": 1767225599,
+      "pointer": "c",
+      "ring": "a_only"
+    },
+    {
+      "expected": "unknown_key",
+      "floor": null,
+      "now": 1767225600,
+      "pointer": "d",
+      "ring": "a_only"
+    },
+    {
+      "expected": "signature_error",
+      "floor": null,
+      "now": 1767225599,
+      "pointer": "a",
+      "ring": "b_only"
+    },
+    {
+      "expected": "unknown_key",
+      "floor": null,
+      "now": 1767225599,
+      "pointer": "b",
+      "ring": "b_only"
+    },
+    {
+      "expected": "ok",
+      "floor": null,
+      "now": 1767225599,
+      "pointer": "c",
+      "ring": "b_only"
+    }
+  ],
+  "check_order": [
+    "parse the pointer strictly (key_id 16 lowercase hex; expires_at an integer 0 < v < 2^53)",
+    "key selection: named key revoked -> key_revoked; named key not in the ring -> unknown_key",
+    "signature: the named key only, else any non-revoked key; an unnamed signature verifying only under a revoked key still listed in keys -> key_revoked; otherwise signature_error",
+    "expiry, only after the signature verified: now >= expires_at -> expired",
+    "identity pins, manifest hash, chunks, reassembly",
+    "promote: sequence strictly greater than the active floor, else rollback"
+  ],
+  "generator": "scripts/gen_keyring_vectors.py",
+  "keyrings": {
+    "a_only": {
+      "keys": [
+        {
+          "key_id": "34750f98bd59fcfc",
+          "public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+        }
+      ],
+      "revoked": [],
+      "schema": "edgeproc.keyring/v1"
+    },
+    "ab": {
+      "keys": [
+        {
+          "key_id": "34750f98bd59fcfc",
+          "public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+        },
+        {
+          "key_id": "6a3803d5f059902a",
+          "public_key": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394"
+        }
+      ],
+      "revoked": [],
+      "schema": "edgeproc.keyring/v1"
+    },
+    "b_only": {
+      "keys": [
+        {
+          "key_id": "6a3803d5f059902a",
+          "public_key": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394"
+        }
+      ],
+      "revoked": [],
+      "schema": "edgeproc.keyring/v1"
+    },
+    "b_revoked_a": {
+      "keys": [
+        {
+          "key_id": "6a3803d5f059902a",
+          "public_key": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394"
+        }
+      ],
+      "revoked": [
+        "34750f98bd59fcfc"
+      ],
+      "schema": "edgeproc.keyring/v1"
+    },
+    "b_revoked_a_listed": {
+      "keys": [
+        {
+          "key_id": "34750f98bd59fcfc",
+          "public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+        },
+        {
+          "key_id": "6a3803d5f059902a",
+          "public_key": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394"
+        }
+      ],
+      "revoked": [
+        "34750f98bd59fcfc"
+      ],
+      "schema": "edgeproc.keyring/v1"
+    }
+  },
+  "keys": {
+    "A": {
+      "key_id": "34750f98bd59fcfc",
+      "public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "seed_hex": "0101010101010101010101010101010101010101010101010101010101010101"
+    },
+    "B": {
+      "key_id": "6a3803d5f059902a",
+      "public_key": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+      "seed_hex": "0202020202020202020202020202020202020202020202020202020202020202"
+    }
+  },
+  "manifest_canonical": "{\"bundle_id\":\"vectors\",\"files\":[{\"chunks\":[{\"hash\":\"1c6ae25e96c664632412293505d9e7b5eedc2e4995147854af31330a2601696e\",\"size\":25}],\"file_sha256\":\"1c6ae25e96c664632412293505d9e7b5eedc2e4995147854af31330a2601696e\",\"file_type\":null,\"path\":\"hello.txt\",\"size\":25}],\"metadata\":{},\"schema_version\":2,\"version\":\"2026-01-01\"}",
+  "manifest_hash": "f79d728a5edf8bc337ddc93009b1ea97ea394942b11e5bf120b6ac68d775cee1",
+  "payload": {
+    "bundle_id": "vectors",
+    "files": {
+      "hello.txt": "edgeproc keyring vectors\n"
+    },
+    "version": "2026-01-01"
+  },
+  "pointers": {
+    "a": {
+      "preimage_hex": "7b2262756e646c655f6964223a22766563746f7273222c226368616e6e656c223a22737461626c65222c226d616e69666573745f68617368223a2266373964373238613565646638626333333764646339333030396231656139376561333934393432623131653562663132306236616336386437373563656531222c2273657175656e6365223a312c2276657273696f6e223a22323032362d30312d3031227d",
+      "signature_hex": "798d30eb93aab5106315eeceb423ef499d2464073bb3b141ff7c0bf7d91c42c9c660128c0878d215bbf683566c53dca468b59a46c43cc653335f640f4e171203",
+      "signer": "A",
+      "wire_json": "{\"manifest_hash\":\"f79d728a5edf8bc337ddc93009b1ea97ea394942b11e5bf120b6ac68d775cee1\",\"version\":\"2026-01-01\",\"bundle_id\":\"vectors\",\"channel\":\"stable\",\"sequence\":1,\"signature\":\"eY0w65OqtRBjFe7OtCPvSZ0kZAc7s7FB/3wL99kcQsnGYBKMCHjSFbv2g1ZsU9ykaLWaRsQ8xlMzX2QPThcSAw==\"}"
+    },
+    "b": {
+      "preimage_hex": "7b2262756e646c655f6964223a22766563746f7273222c226368616e6e656c223a22737461626c65222c226b65795f6964223a2233343735306639386264353966636663222c226d616e69666573745f68617368223a2266373964373238613565646638626333333764646339333030396231656139376561333934393432623131653562663132306236616336386437373563656531222c2273657175656e6365223a322c2276657273696f6e223a22323032362d30312d3031227d",
+      "signature_hex": "acb7e1b1ffb4d20ee7b9e22525e4533213213fcf1219db5f77a777379dc543fba2ee6d228dfc6dbf40fca09b846b0457e52747160384f0ec02a57e4026b97a06",
+      "signer": "A",
+      "wire_json": "{\"manifest_hash\":\"f79d728a5edf8bc337ddc93009b1ea97ea394942b11e5bf120b6ac68d775cee1\",\"version\":\"2026-01-01\",\"bundle_id\":\"vectors\",\"channel\":\"stable\",\"sequence\":2,\"key_id\":\"34750f98bd59fcfc\",\"signature\":\"rLfhsf+00g7nueIlJeRTMhMhP88SGdtfd6d3N53FQ/ui7m0ijfxtv0D8oJuEawRX5SdHFgOE8OwCpX5AJrl6Bg==\"}"
+    },
+    "c": {
+      "preimage_hex": "7b2262756e646c655f6964223a22766563746f7273222c226368616e6e656c223a22737461626c65222c226b65795f6964223a2236613338303364356630353939303261222c226d616e69666573745f68617368223a2266373964373238613565646638626333333764646339333030396231656139376561333934393432623131653562663132306236616336386437373563656531222c2273657175656e6365223a332c2276657273696f6e223a22323032362d30312d3031227d",
+      "signature_hex": "37b8845be3c2d0c2092a08035e72017ba24c6c79daccd32cb6d3bf1ca0e13063634a0543736a65d7fa8450a4b948cf2c48dbbd08db5c72037d6837e77387f105",
+      "signer": "B",
+      "wire_json": "{\"manifest_hash\":\"f79d728a5edf8bc337ddc93009b1ea97ea394942b11e5bf120b6ac68d775cee1\",\"version\":\"2026-01-01\",\"bundle_id\":\"vectors\",\"channel\":\"stable\",\"sequence\":3,\"key_id\":\"6a3803d5f059902a\",\"signature\":\"N7iEW+PC0MIJKggDXnIBe6JMbHnazNMsttO/HKDhMGNjSgVDc2pl1/qEUKS5SM8sSNu9CNtccgN9aDfnc4fxBQ==\"}"
+    },
+    "d": {
+      "preimage_hex": "7b2262756e646c655f6964223a22766563746f7273222c226368616e6e656c223a22737461626c65222c22657870697265735f6174223a313736373232353630302c226b65795f6964223a2236613338303364356630353939303261222c226d616e69666573745f68617368223a2266373964373238613565646638626333333764646339333030396231656139376561333934393432623131653562663132306236616336386437373563656531222c2273657175656e6365223a342c2276657273696f6e223a22323032362d30312d3031227d",
+      "signature_hex": "caa61bc2851f6d8c7dcc216046e888944fbf5b02f6e332d6cd73b9e97a481ca39e8675c8a94a8ff94329a8ef175733e090587bd6111422e852fca25fe592540a",
+      "signer": "B",
+      "wire_json": "{\"manifest_hash\":\"f79d728a5edf8bc337ddc93009b1ea97ea394942b11e5bf120b6ac68d775cee1\",\"version\":\"2026-01-01\",\"bundle_id\":\"vectors\",\"channel\":\"stable\",\"sequence\":4,\"key_id\":\"6a3803d5f059902a\",\"expires_at\":1767225600,\"signature\":\"yqYbwoUfbYx9zCFgRuiIlE+/WwL24zLWzXO56XpIHKOehnXIqUqP+UMpqO8XVzPgkFh71hEUIuhS/KJf5ZJUCg==\"}"
+    }
+  },
+  "schema": "edgeproc.keyring-scenarios/v1"
+}

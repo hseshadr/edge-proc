@@ -15,7 +15,7 @@ but valid signed release, malformed manifests/chunks, decompression bombs, path 
 and concurrent local writers.
 
 The private signing key is trusted and stays only on the publisher. Consumers receive the
-public key out of band. The CDN and all downloaded bytes are untrusted. A production
+trust root — one public key, or a keyring of several with a revocation list — out of band. The CDN and all downloaded bytes are untrusted. A production
 consumer should publish with `bundle_id`, `channel`, and `sequence`, then sync with
 `expected_bundle_id` and `expected_channel`; legacy unbound pointers remain compatible but
 do not provide cross-bundle identity protection.
@@ -36,14 +36,16 @@ been promoted and the first promote needs no proof; an `active` that exists but 
 read as a pointer is refused as `[bundle.integrity_failed]`, never treated as "nothing is
 active" — that answer would skip the freshness check altogether.
 
-Before promotion, EdgeProc verifies the pointer signature, pinned identity, manifest hash,
+Before promotion, EdgeProc verifies the pointer signature (under the key the pointer names,
+never a revoked one), any signed expiry, pinned identity, manifest hash,
 manifest identity, every chunk hash, and complete file reassembly. Paths are contained
 under the selected root. HTTP bodies, decompressed chunks, aggregate sync bytes,
 materialized file bytes, file counts, and lock waits have hard ceilings. A shared filesystem mutation lock serializes
 publish, sync, promote, garbage collection, and CLI materialization across cooperating
 threads and processes, so a stale last writer cannot bypass the rollback check.
 
-Out of scope: compromise of the publisher's private key, a local attacker who can already
+Out of scope: preventing compromise of the publisher's private key (containing one is the
+revocation runbook below), a local attacker who can already
 write the consumer's cache or process memory, vulnerabilities inside a consumer-supplied
 runtime/telemetry sink, and availability of a consumer-selected CDN or model registry.
 
@@ -124,76 +126,117 @@ allocations. Share one manager across facades that share a process boundary.
 
 ## Key rotation and compromised-key runbook
 
-This section describes what exists today, not what is planned. EdgeProc trusts a
-**single pinned Ed25519 root**: a consumer pins exactly one public key
-(`EDGEPROC_TRUST_ROOT_PUBKEY_PATH`, or `--key` on `edgeproc sync`; a browser app pins the
-`public.key` it ships), and the signed `VersionPointer` is the only signed object. There
-is no keyring, no `key_id` in the pointer, **no revocation list, and no pointer expiry**.
-A pointer signed by the pinned key stays valid until the consumer pins a different key.
+A consumer pins a **trust root** (`EDGEPROC_TRUST_ROOT_PUBKEY_PATH`, or `--key` on
+`edgeproc sync`). It is one of two things, told apart by size:
 
-What makes rotation safe is the anti-rollback floor. The active pointer a consumer already
-promoted is the freshness floor, and it is never re-verified against the newly pinned key
-(`FilesystemCacheStore` never re-verifies it; `@edgeproc/browser` keeps it as the floor
-even when the current key cannot verify it, and refuses to serve that cached bundle
-offline). So an OLD release re-signed with the new key is still refused as a rollback,
-provided the publisher's `sequence` keeps increasing across the rotation.
+- a raw 32-byte `public.key` — what `edgeproc keygen` writes. It loads as a keyring of one
+  and verifies exactly as the single pinned key always did; nothing about an existing
+  deployment changes; or
+- a JSON **keyring** (`edgeproc.keyring/v1`, at most 64 KiB): 1–64 keys, each named by its
+  `key_id` (the first 16 lowercase hex chars of the SHA-256 of the raw public key), plus a
+  `revoked` list of up to 1024 key ids. A key listed in both is revoked. `edgeproc keyring
+  init | add | revoke | show` maintains the file; `edgeproc keygen` prints each new key's id.
 
-### Planned rotation
+The signed `VersionPointer` may carry two optional signed fields. `key_id` names the key
+that signed it: a keyring verifies it under THAT key only, refuses it as revoked
+(`KeyRevokedError`) when the id is revoked, and as unknown (`UnknownKeyError`) when the ring
+does not hold it. A pointer without `key_id` must verify under at least one non-revoked
+key, so a revoked key's signature never verifies either way. `expires_at` (Unix seconds)
+makes `sync` refuse the fetched pointer from that second on (`PointerExpiredError`); it is
+judged only after the signature verified. Every refusal is `[bundle.integrity_failed]`,
+fail-closed, and promotes nothing: what is already active stays active and keeps serving.
 
-1. On the publisher, generate the new pair offline: `edgeproc keygen --out <new-dir>`.
-   Keep `private.key` out of every repository and CI log.
-2. Read the live pointer's `sequence` (call it `N`). Every pointer signed with the new key
-   must carry a `sequence` strictly greater than `N`. Never restart the counter: a
-   consumer whose floor is `N` refuses anything at or below it, and the Python store
-   refuses an equal-sequence pointer that is not byte-identical — a re-signature is not.
-3. Re-sign and publish the current release, or the next one, with the new key:
-   `edgeproc publish ... --key <new-dir>/private.key --sequence <N+1>` (keep the same
-   `--bind-identity`/`--channel` values the consumers pin).
-4. Ship the new public key to consumers: replace the file at
-   `EDGEPROC_TRUST_ROOT_PUBKEY_PATH` for Python hosts, or rebuild and release the app
-   with the new `public.key` for browser hosts.
-5. Cut the origin and the consumers over together. With one pinned key there is no
-   overlap window: a consumer still pinning the old key refuses the new-key pointer, and a
-   consumer pinning the new key refuses an old-key pointer. Both refusals are fail-closed
-   (`SignatureError`, nothing promoted); the consumer keeps what it already has until the
-   key and the pointer agree again.
-6. Destroy the old private key once nothing publishes with it.
+The anti-rollback floor is unchanged and independent of keys. The promoted pointer is the
+floor, is never re-verified against a newly pinned trust root, and a pointer must carry a
+strictly greater `sequence` to replace it — whichever key signed either one. So an OLD
+release re-signed by a new key, or an old key's pointer replayed during the overlap
+window, is refused as a rollback.
+
+### Upgrade order: consumers first, then stamping
+
+Stamping `key_id`/`expires_at` is **off by default** (`publish --stamp-key-id`,
+`--expires-in`, or `EDGEPROC_PUBLISH_STAMP_KEY_ID` / `EDGEPROC_PUBLISH_EXPIRES_IN`), and
+unstamped output is byte-identical to earlier releases. A consumer older than the keyring
+release rejects a pointer that carries either field (its pointer model forbids unknown
+fields): the sync fails and nothing is promoted, but it cannot update until upgraded.
+
+1. Upgrade every consumer (Python hosts and `@edgeproc/browser` apps) to a keyring-aware
+   release. Their existing raw `public.key` keeps working unchanged.
+2. Optionally move consumers from `public.key` to a keyring file (`edgeproc keyring init
+   keys/public.key --out keyring.json`); the ring of one behaves identically.
+3. Only then turn on stamping at the publisher.
+
+### Planned rotation (overlap window)
+
+1. On the publisher, generate the new pair offline: `edgeproc keygen --out <new-dir>` (note
+   the printed `key_id`). Keep `private.key` out of every repository and CI log.
+2. Add the new public key to the consumers' keyring and ship it: `edgeproc keyring add
+   keyring.json <new-dir>/public.key`. Consumers now trust `{old, new}`; the publisher is
+   still signing with the old key, so nothing else changes yet.
+3. Once every consumer has the `{old, new}` ring, switch the publisher to the new key:
+   `edgeproc publish ... --key <new-dir>/private.key --sequence <N+1> --stamp-key-id`,
+   where `N` is the live pointer's `sequence` and the `--bind-identity`/`--channel` values
+   stay what consumers pin. Never restart the counter: a floor at `N` refuses anything at
+   or below it, and an equal sequence that is not byte-identical is refused too.
+4. Retire the old key: `edgeproc keyring revoke keyring.json <old-key-id>` and ship the
+   `{new, revoked old}` ring. Keeping the revoked key's public half in `keys` lets a
+   consumer report an unnamed pointer signed by it as revoked rather than merely invalid.
+5. Destroy the old private key once nothing publishes with it.
+
+There is no flag day: at every step each consumer holds a ring that verifies whatever the
+publisher is currently signing.
 
 ### Compromised signing key
 
-A holder of the private key can sign any pointer, at any `sequence`, and every consumer
-pinning that key accepts it. Nothing in the library can tell that pointer apart from a
-genuine one, and nothing lets a consumer distrust the key remotely.
+A holder of the private key can sign any pointer, at any `sequence`, with any
+`expires_at`. Revocation is what stops consumers trusting it, and it takes effect for a
+consumer when that consumer's pinned keyring is updated — there is no remotely fetched
+revocation list in this library.
 
-1. Stop publishing with the compromised key and preserve the origin's current state for
+1. Revoke immediately: `edgeproc keyring revoke keyring.json <compromised-key-id>` (add the
+   replacement key first if the ring holds no other key — a ring must keep one
+   non-revoked key) and push the ring to every consumer as a configuration change. From
+   that moment a consumer refuses every pointer the compromised key signed — named or
+   unnamed, at any `sequence`.
+2. Stop publishing with the compromised key and preserve the origin's current state for
    investigation.
-2. Generate a new key (planned-rotation steps 1 to 3) and publish a known-good release
-   at a `sequence` strictly greater than any value the attacker could have pushed to
-   consumers. An attacker who pushed a very large `sequence` leaves those consumers with a
-   floor no legitimate release can clear; they must recover as in step 4.
-3. Ship the new public key to every consumer (planned-rotation step 4). Until a consumer
-   gets the new key it keeps trusting the compromised one, because there is no revocation
-   list and no expiry.
-4. Treat every consumer that synced while the key was exposed as possibly holding
-   attacker content. Quarantine and recreate its cache (see the recovery contract above;
-   in the browser, the explicit cache clear), then sync from the trusted origin under the
-   new key. EdgeProc has no telemetry, so which consumers synced in the window is the host
+3. Publish a known-good release with the replacement key at a `sequence` strictly greater
+   than any value the attacker could have pushed to consumers (bump well past it). An
+   attacker who pushed a very large `sequence` leaves those consumers with a floor no
+   legitimate release can clear; they must recover as in step 4.
+4. Treat every consumer that synced while the key was exposed as possibly holding attacker
+   content. Quarantine and recreate its cache (see the recovery contract above; in the
+   browser, the explicit cache clear), then sync from the trusted origin under the new
+   ring. EdgeProc has no telemetry, so which consumers synced in the window is the host
    operator's record, not the library's.
+
+A pre-provisioned standby key shortens step 1: consumers that already pin `{active,
+standby}` only need the revocation pushed, and the publisher can switch to the standby key
+at once.
+
+### Expiry and the re-sign cadence
+
+`expires_at` bounds how long a withheld pointer stays acceptable: an attacker who can block
+updates (a freeze) can keep a consumer on its last valid release only until that release's
+pointer expires. Choose `--expires-in` longer than your longest publish interval plus the
+slowest consumer's sync interval and clock skew, then re-sign on a fixed cadence — for
+example `--expires-in 7d` and a daily publish. Re-signing an unchanged release still needs a
+strictly greater `--sequence`. When a consumer's latest fetched pointer has expired, `sync`
+exits non-zero and the consumer keeps serving what it already has; that is the signal to
+alert on. Consumer clocks matter: a clock running ahead expires pointers early (a refusal,
+never an acceptance); a clock set far behind extends the freeze window.
 
 ### Known limits
 
-- **No revocation.** A compromised key stays trusted until each consumer's pinned key is
-  replaced by an app or configuration release.
-- **No pointer expiry.** A validly signed pointer never goes stale on its own, so an
-  attacker who can withhold updates can keep a consumer on its last valid release (a
-  freeze) indefinitely; the consumer cannot detect it.
-- **No overlap window.** One pinned key means a rotation needs a coordinated cutover.
+- **Revocation is local configuration.** It protects a consumer from the moment its pinned
+  keyring lists the key as revoked, and not before. Distribute keyring updates the way you
+  distribute the trust root itself.
+- **Expiry bounds a freeze, not a compromise.** A holder of a still-trusted key can sign
+  pointers with any expiry; revocation is the answer to compromise.
 - **A floor can be pinned too high.** A tampered durable counter, or an attacker-signed
   huge `sequence`, makes the consumer refuse every later release until its cache is
   cleared. The failure is a refusal, never an accepted rollback.
-
-A trust-root keyring with `key_id`, revocation, and pointer expiry is a roadmap item in
-[ROADMAP.md](../ROADMAP.md). It is not built.
+- **Stamped pointers need upgraded consumers.** See the upgrade order above.
 
 ## Measured performance contract
 

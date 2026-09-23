@@ -8,19 +8,59 @@ token, k) and ``bundles`` (http timeout) consume it, so it must not sit behind a
 A library reads config lazily: construct ``EdgeProcSettings()`` where a default is
 actually needed, never at import time. Env vars use the ``EDGEPROC_`` prefix
 (``EDGEPROC_MODEL_NAME``, ``EDGEPROC_DEFAULT_K``, ``EDGEPROC_HTTP_TIMEOUT``,
-``EDGEPROC_TRUST_ROOT_PUBKEY_PATH`` — the pinned sync trust-root key); the token uses
+``EDGEPROC_TRUST_ROOT_PUBKEY_PATH`` — the pinned sync trust root, a key or a keyring); the
+token uses
 the ecosystem-standard ``HF_TOKEN`` so it drops in beside the rest of the HF stack.
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
-from typing import Final
+from typing import Annotated, Final
 
-from pydantic import Field
+from pydantic import BeforeValidator, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_MODEL: Final[str] = "sentence-transformers/all-MiniLM-L6-v2"
+
+_DURATION: Final = re.compile(r"([0-9]+)([smhdw]?)")
+_UNIT_SECONDS: Final[dict[str, int]] = {
+    "": 1,
+    "s": 1,
+    "m": 60,
+    "h": 3600,
+    "d": 86_400,
+    "w": 604_800,
+}
+#: A signed ``expires_at = now + duration`` must stay below 2**53 (JSON-safe on every
+#: runtime). Capping the duration at 2**52 seconds keeps the sum safe for ~142M years.
+_MAX_DURATION_SECONDS: Final = 2**52
+
+
+def parse_duration(text: str) -> int:
+    """Parse a positive duration: bare seconds (``3600``) or one unit (``90s 30m 12h 7d 2w``).
+
+    ASCII digits only, one lowercase unit, no fractions or signs: a pointer lifetime has
+    exactly one spelling, and anything else is refused rather than guessed at.
+    """
+    match = _DURATION.fullmatch(text.strip())
+    if match is None:
+        raise ValueError(f"invalid duration {text!r}: use seconds or <n>s|m|h|d|w")
+    seconds = int(match.group(1)) * _UNIT_SECONDS[match.group(2)]
+    if not 0 < seconds <= _MAX_DURATION_SECONDS:
+        raise ValueError(f"invalid duration {text!r}: must be positive and at most 2**52 seconds")
+    return seconds
+
+
+def _duration_or_none(value: object) -> object:
+    """Settings adapter: a duration string becomes seconds; ints pass to strict validation."""
+    return parse_duration(value) if isinstance(value, str) else value
+
+
+type DurationSeconds = Annotated[
+    int, BeforeValidator(_duration_or_none), Field(strict=True, gt=0, le=_MAX_DURATION_SECONDS)
+]
 
 
 class EdgeProcSettings(BaseSettings):
@@ -82,5 +122,12 @@ class EdgeProcSettings(BaseSettings):
     task_budget_memory_mb: int = 256
     # RRF rank-window constant — bigger k flattens the score curve (fewer top-rank wins).
     rrf_k_window: int = 60
-    # Pinned TUF-style trust-root public key; a `sync` with none set is refused (fail-closed).
+    # Pinned trust root: a raw 32-byte `public.key` (a keyring of one) or a JSON keyring
+    # (`edgeproc.keyring/v1`). A `sync` with none set is refused (fail-closed).
     trust_root_pubkey_path: Path | None = None
+    # Publisher stamping, OFF by default: an older consumer's pointer model forbids unknown
+    # fields, so upgrade every consumer before turning either on. `publish_stamp_key_id`
+    # signs the key's `key_id` into the pointer; `publish_expires_in` (seconds, or 90s /
+    # 30m / 12h / 7d / 2w) signs `expires_at = now + duration`.
+    publish_stamp_key_id: bool = False
+    publish_expires_in: DurationSeconds | None = None
