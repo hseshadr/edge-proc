@@ -293,3 +293,63 @@ def _forge_pointer_bundle_id(origin: Path, signer: Ed25519Signer, *, forged: str
     signature = signer.sign(pointer_signing_bytes(forged_unsigned))
     forged_pointer = forged_unsigned.model_copy(update={"signature": signature})
     (origin / "latest").write_bytes(forged_pointer.model_dump_json().encode("utf-8"))
+
+
+# --- key rotation: the rollback floor survives a change of pinned key -------------------
+
+
+def _publish_release(
+    origin: Path, signer: Ed25519Signer, *, version: str, sequence: int
+) -> VersionPointer:
+    return build_bundle(
+        files={"release.txt": version.encode("utf-8")},
+        store=FilesystemCacheStore(origin),
+        chunker=GearCDC(),
+        signer=signer,
+        bundle_id="rotating",
+        version=version,
+        channel="stable",
+        sequence=sequence,
+        bind_identity=True,
+    )
+
+
+def test_rollback_floor_survives_a_trust_root_rotation(tmp_path: Path) -> None:
+    """The stored active pointer stays the anti-rollback floor after the pinned key changes.
+
+    The active pointer was signed by the retired key A; the consumer now pins key B. An
+    OLD release re-signed by B (sequence 5 < 10) must be refused as a rollback — the
+    floor is never re-verified against the new key, so a rotation cannot reset it. The
+    browser runtime (``@edgeproc/browser``) holds the same rule. A fresher release signed
+    by B (sequence 11) promotes normally.
+    """
+    # Given
+    key_a, pub_a = generate_keypair()
+    key_b, pub_b = generate_keypair()
+    verifier_a = Ed25519Verifier.from_public_bytes(pub_a.public_bytes_raw())
+    verifier_b = Ed25519Verifier.from_public_bytes(pub_b.public_bytes_raw())
+    cache = FilesystemCacheStore(tmp_path / "cache")
+    pinned = tmp_path / "pinned"
+    _publish_release(pinned, Ed25519Signer(key_a), version="10.0.0", sequence=10)
+    sync_index(base_url=str(pinned), store=cache, adapter=FilesystemAdapter(), verifier=verifier_a)
+    active_under_a = cache.read_active()
+    replay = tmp_path / "replay"
+    _publish_release(replay, Ed25519Signer(key_b), version="5.0.0", sequence=5)
+    fresher = tmp_path / "fresher"
+    _publish_release(fresher, Ed25519Signer(key_b), version="11.0.0", sequence=11)
+
+    # When / Then — an old release re-signed by the new key is a rollback
+    with pytest.raises(RollbackError):
+        sync_index(
+            base_url=str(replay), store=cache, adapter=FilesystemAdapter(), verifier=verifier_b
+        )
+    assert cache.read_active() == active_under_a
+
+    # When / Then — a fresher release under the new key promotes
+    result = sync_index(
+        base_url=str(fresher), store=cache, adapter=FilesystemAdapter(), verifier=verifier_b
+    )
+    assert result.version == "11.0.0"
+    active = cache.read_active()
+    assert active is not None
+    assert active.sequence == 11

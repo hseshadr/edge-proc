@@ -4,6 +4,18 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
 
 ## [Unreleased]
 
+### Added
+
+- **Key rotation and compromised-key runbook** in `docs/OPERATIONS.md`, linked from
+  `SECURITY.md`. It describes today's trust root as it is: one pinned Ed25519 key,
+  rotation as a coordinated re-sign plus a consumer release shipping the new public key,
+  with `sequence` strictly increasing so the anti-rollback floor holds, and no keyring,
+  revocation list, or pointer expiry. The keyring (`key_id`, revocation, expiry) is listed
+  in `ROADMAP.md` as designed, not built.
+- A regression test pins that the promoted pointer stays the rollback floor after the
+  pinned key changes: an old release re-signed by a new key is refused, and a fresher one
+  promotes. `@edgeproc/browser` was fixed to hold the same rule.
+
 ## [0.4.1] — 2026-08-13
 
 This corrective release supersedes 0.4.0 for applications that persist a
