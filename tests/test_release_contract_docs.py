@@ -56,11 +56,11 @@ def test_readme_links_the_operations_contract() -> None:
 def test_readme_leads_with_the_real_end_to_end_demo() -> None:
     """A cold reader reaches a runnable result before the long explanation."""
     readme = _read("README.md")
-    quickstart = readme.index("## Quickstart")
-    story = readme.index("## The problem, as a story")
+    try_it = readme.index("## Try it in 60 seconds")
+    story = readme.index("### The problem, as a story")
 
-    assert quickstart < story
-    assert "bash examples/run_loop.sh" in readme[quickstart:story]
+    assert try_it < story
+    assert "bash examples/run_loop.sh" in readme[try_it:story]
 
 
 def test_release_copy_stays_true_before_and_after_registry_propagation() -> None:
