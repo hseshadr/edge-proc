@@ -31,7 +31,7 @@ it here**. Design spec: `~/dev/project-ideas/oss/edgeproc.md`.
 - `edgeproc/bundles/` — content-defined chunking, content-addressed CAS,
   ed25519 signing, publish/sync with fail-closed verification.
 - `edgeproc/cli/` — `edgeproc` typer app: `version` · `list-runtimes` ·
-  `keygen` · `publish` · `sync` · `route`.
+  `keygen` · `keyring` · `publish` · `sync` · `route` · `gc`.
 - `tests/` — unit + integration + public-surface tests (one pytest suite).
 - `examples/` — `quickstart.py`, `run_loop.sh`, tiny realistic catalog.
 - `docs/` — `ARCHITECTURE.md`, `QUICKSTART.md`. Diagrams live **inline as

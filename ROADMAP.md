@@ -18,6 +18,19 @@ date.
 - **PyPI distribution** (`edge-proc`): wheels and source archives published through GitHub
   OIDC with PEP 740 provenance.
 
+## Shipped on `main` (unreleased)
+
+- **Trust-root keyring: `key_id`, revocation, and pointer expiry.** A consumer pins a raw
+  `public.key` (a keyring of one, unchanged behavior) or a JSON keyring of 1–64 keys with a
+  revocation list. A signed pointer may name its signing `key_id` (selected; unknown or
+  revoked refused) and carry a signed `expires_at` (refused from that second, after the
+  signature verifies). Rotation is an overlap window instead of a cutover; `edgeproc
+  keyring` maintains the file; stamping is opt-in at the publisher so older consumers are
+  unaffected. The `sequence` rollback floor is unchanged. Revocation is distributed by
+  updating the consumer's pinned keyring — there is no remotely fetched, signed revocation
+  list. Shared cross-runtime vectors pin the format with `@edgeproc/browser`. Runbook:
+  [docs/OPERATIONS.md](docs/OPERATIONS.md#key-rotation-and-compromised-key-runbook).
+
 ## Near-term
 
 These are the seams already designed into the architecture, in rough priority order:
@@ -35,17 +48,7 @@ These are the seams already designed into the architecture, in rough priority or
    sync paths instead of all-or-nothing access. *(Protocol seam exists; not built.)*
 3. **Sigstore keyless bundle signing** — an alternative to pinned ed25519 keys, removing the
    private-key custody burden for publishers. *(Protocol seam exists; not built.)*
-4. **Trust-root keyring: `key_id`, revocation, and pointer expiry.** Today a consumer pins
-   exactly one Ed25519 public key, so rotation needs a coordinated cutover and a
-   compromised key stays trusted until every consumer ships a new pinned key (see the
-   runbook in [docs/OPERATIONS.md](docs/OPERATIONS.md#key-rotation-and-compromised-key-runbook)).
-   The design: consumers pin a small keyring instead of one key; the signed pointer names
-   its signing `key_id`; a signed revocation list retires a key before its successor is
-   pinned everywhere; and a signed expiry bounds how long a withheld (frozen) pointer
-   stays acceptable. It changes the signed pointer, so it lands in this library and in
-   `@edgeproc/browser` together, with a compatibility path for single-key consumers and
-   the `sequence` floor unchanged. *(Designed, not built.)*
-5. **More runtimes behind the same router seam** — the router is runtime-agnostic; growing
+4. **More runtimes behind the same router seam** — the router is runtime-agnostic; growing
    the runtime catalog beyond LocalVec is the natural next step.
 
 ## Out of scope

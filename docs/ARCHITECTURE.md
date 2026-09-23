@@ -15,7 +15,7 @@ The three live behind three small surfaces — `edgeproc.core`, `edgeproc.localv
 flowchart TD
     pub["Publisher — the build machine<br/>Splits the files into chunks, then signs<br/>one /latest pointer with an ed25519 key"]
     origin["Origin — any static HTTP server or CDN<br/>Holds /latest (signed), the manifests, and the<br/>zstd-compressed chunks, each named by its sha256.<br/>No app logic: it just serves files by hash"]
-    key["Pinned public key<br/>The one thing a device must get out-of-band"]
+    key["Pinned trust root — one public key or a keyring<br/>The one thing a device must get out-of-band"]
     dev["Device — edgeproc sync<br/>Verify the signature, diff against the local cache,<br/>fetch only the missing chunks, promote atomically"]
     app["Your app — EdgeProc.run(Task)<br/>A deterministic router picks the runtime<br/>that owns the task and returns a ResultEnvelope"]
 
@@ -29,9 +29,9 @@ Three parties:
 
 - **Publisher** (build-side) signs a `/latest` pointer once per release and writes content-addressed chunks under `origin/`.
 - **Origin** is any static HTTP server or CDN. It has no app logic — it serves files by hash.
-- **Consumer** runs `edgeproc sync` to pull the pointer, verify it against a pinned public key, fetch only the missing chunks, and atomically promote the new version. Then the consumer's app calls `EdgeProc.run(Task(...))` and a deterministic router picks the runtime that owns that task.
+- **Consumer** runs `edgeproc sync` to pull the pointer, verify it against its pinned trust root, fetch only the missing chunks, and atomically promote the new version. Then the consumer's app calls `EdgeProc.run(Task(...))` and a deterministic router picks the runtime that owns that task.
 
-The trust boundary is the pinned public key. Everything an attacker could swap — chunks, manifests, the pointer, and the embedding model — is recomputed and verified locally, so the key is the only thing the consumer has to obtain out-of-band.
+The trust boundary is the pinned trust root: a single raw public key (`public.key`, what `keygen` writes) or a **keyring** of several keys with a revocation list (`edgeproc.keyring/v1`, built with `edgeproc keyring`). Everything an attacker could swap — chunks, manifests, the pointer, and the embedding model — is recomputed and verified locally, so the trust root is the only thing the consumer has to obtain out-of-band. A keyring is what makes rotation an overlap instead of a cutover: pin `{old, new}`, switch the publisher, then pin `{new, revoked old}` (runbook: [OPERATIONS.md](OPERATIONS.md#key-rotation-and-compromised-key-runbook)).
 
 The model belongs in that list because it ships **inside the signed bundle as ordinary payload**, not as an ambient dependency the device resolves at first query. It used to be the exception, and that made the sentence above false: `TextEncoder`, handed a bare hub id, called huggingface.co while constructing itself, so a second unpinned artifact arrived out-of-band and nobody noticed — on a machine with a warm Hub cache the fetch is invisible. EdgeProc now refuses to fetch unless a deploy sets `EDGEPROC_ALLOW_MODEL_DOWNLOAD`, which is meant for the build machine that assembles the bundle. A model provisioned outside the bundle sits outside the verification chain until `EDGEPROC_MODEL_DIGEST` pins it; a directory whose bytes don't match the pin is refused as `bundle.integrity_failed`.
 
@@ -42,7 +42,7 @@ The model belongs in that list because it ships **inside the signed bundle as or
 flowchart TD
     keygen["1. keygen<br/>Mint an ed25519 keypair. private.key signs on the<br/>publisher; public.key is the pin a device trusts.<br/>The public key travels out-of-band"]
     publish["2. publish<br/>Split every file under --src/ with content-defined<br/>chunking (GearCDC). Write each unique chunk once<br/>under its sha256, build a manifest, and sign<br/>a /latest version pointer"]
-    sync["3. sync<br/>Pull /latest. Verify the signature against the pinned<br/>public key, or fail closed. Diff the manifest against the<br/>local cache, fetch only the missing chunks, re-check<br/>each chunk's content hash, promote the version atomically"]
+    sync["3. sync<br/>Pull /latest. Verify the signature under the pinned trust<br/>root (the key the pointer names; never a revoked key) and<br/>any signed expiry, or fail closed. Diff the manifest against<br/>the local cache, fetch only the missing chunks, re-check<br/>each chunk's content hash, promote the version atomically"]
     route["4. route<br/>A pure deterministic router picks the first registered<br/>runtime that ACCEPTs the Task. The same Task against<br/>the same registry picks the same runtime, always,<br/>and the trace replays"]
 
     keygen -->|"private.key"| publish
@@ -59,6 +59,9 @@ Invariants — the security model in one screen:
   chunk, not the whole file.
 - Tamper with any chunk or manifest and it fails its content-address check.
 - Forge the pointer and it fails the signature check.
+- A pointer that names its `key_id` is checked under that key only: a revoked key is refused
+  at any `sequence`, and a key the trust root does not hold is refused as unknown.
+- A pointer past its signed `expires_at` is refused — judged only after the signature verified.
 - Both failures exit non-zero with no traceback.
 - The embedding model is one of the files, so every line above covers it too.
 - `route` never fetches a model. No local model configured means the query is refused
@@ -67,20 +70,21 @@ Invariants — the security model in one screen:
 Four CLI verbs map one-to-one onto the lifecycle stages: `keygen` is one-time, `publish` runs
 on the build host, and `sync` plus `route` run on the device. Three administrative commands
 complete the shipped CLI: `version` reports the package identity, `list-runtimes` shows runtime
-availability, and `gc` reclaims unreferenced bundle objects behind the mutation lock.
+availability, and `gc` reclaims unreferenced bundle objects behind the mutation lock. `keyring`
+(`init` · `add` · `revoke` · `show`) maintains a keyring trust root for rotation and revocation.
 
 ## Content-addressed store and manifest
 
 ```mermaid
 %%{init: {"flowchart": {"wrappingWidth": 460}}}%%
 flowchart TD
-    key["Pinned public key<br/>obtained out-of-band"]
+    key["Pinned trust root — a key or a keyring<br/>obtained out-of-band"]
     latest["latest — the version pointer<br/>the only signed object in the store"]
     m101["manifest for v1.0.1<br/>named by the sha256 of its own bytes;<br/>lists the chunks that make up each file"]
     m100["manifest for v1.0.0<br/>the version already on the device"]
     chunks["chunk store<br/>every unique chunk written once under its sha256,<br/>zstd-compressed. v1.0.0 and v1.0.1 share every chunk<br/>whose bytes did not change"]
 
-    key -->|"1. the ed25519 signature must verify, or stop"| latest
+    key -->|"1. the ed25519 signature must verify under a trusted,<br/>unrevoked key, and a signed expiry must not have passed, or stop"| latest
     latest -->|"2. sha256 of the manifest bytes must equal<br/>the hash inside the pointer, or stop"| m101
     m101 -->|"3. sha256 of every fetched chunk must equal<br/>the hash the manifest lists, or stop"| chunks
     m100 -.->|"shares its unchanged chunks"| chunks
@@ -97,8 +101,8 @@ Chunk-level deduplication is the reason `v1.0.0 → v1.0.1` is a delta, not a fu
 |---|---|---|---|
 | `edgeproc.core` | `edgeproc/core/` | (default) | `Task`, `ResultEnvelope`, `RuntimeRegistry`, deterministic `Router`, `EdgeProcSettings` |
 | `edgeproc.localvec` | `edgeproc/localvec/` | `[localvec]` | `TextEncoder` and the fail-closed `model_source` resolver behind it, `FaissVectorIndex`, `KeywordSearcher` (BM25), reciprocal-rank fusion, `LocalVecRuntime` |
-| `edgeproc.bundles` | `edgeproc/bundles/` | `[bundles]` | content-defined chunking (GearCDC), zstd compression, ed25519 signing, manifest types, `sync_index`, `FetchAdapter` (HTTP + filesystem) |
-| `edgeproc.cli` | `edgeproc/cli/` | (default) | Typer entrypoints: `version`, `list-runtimes`, `sync`, `keygen`, `publish`, `route`, `gc` |
+| `edgeproc.bundles` | `edgeproc/bundles/` | `[bundles]` | content-defined chunking (GearCDC), zstd compression, ed25519 signing, the trust-root keyring (`key_id`, revocation), manifest types, `sync_index`, `FetchAdapter` (HTTP + filesystem) |
+| `edgeproc.cli` | `edgeproc/cli/` | (default) | Typer entrypoints: `version`, `list-runtimes`, `sync`, `keygen`, `keyring`, `publish`, `route`, `gc` |
 
 Heavy dependencies are opt-in. Installing the core gives you `Task`, the router, and the CLI shell. `[localvec]` brings FAISS + sentence-transformers. `[bundles]` brings cryptography + zstandard.
 
@@ -124,5 +128,5 @@ Roadmap seams not built in v0: a Wasmtime deterministic kernel, Biscuit capabili
 ## Reading order
 
 - New here? Start with [QUICKSTART.md](QUICKSTART.md), then come back.
-- Want the security argument in detail? Re-read the content-addressed store diagram above, then `edgeproc/bundles/sync.py` and `edgeproc/bundles/signing.py`.
+- Want the security argument in detail? Re-read the content-addressed store diagram above, then `edgeproc/bundles/sync.py`, `edgeproc/bundles/signing.py`, and `edgeproc/bundles/keyring.py`.
 - Adding a runtime? Read `edgeproc/core/router.py`, then `edgeproc/localvec/runtime.py` as the reference implementation.

@@ -167,7 +167,11 @@ uv run edgeproc keygen --out keys
 
 ```text
 wrote keys/private.key and keys/public.key
+key_id 34750f98bd59fcfc
 ```
+
+The `key_id` (yours will differ) names the key in a keyring. To rotate keys without a flag
+day, pin a keyring instead of one key — see [Key rotation](#key-rotation-a-keyring-trust-root).
 
 ### 3. Publish a signed release
 
@@ -442,6 +446,26 @@ every chunk against its content address, and only then atomically promotes the n
 tampered chunk fails its content-address check; a forged pointer fails its signature check —
 both exit non-zero with no traceback, and neither promotes into the cache.
 
+### Key rotation: a keyring trust root
+
+`--key` / `EDGEPROC_TRUST_ROOT_PUBKEY_PATH` accepts the raw `public.key` above (a keyring of
+one — exactly the single-key behavior) or a JSON keyring of several keys plus a revocation
+list. A pointer can name the key that signed it (`publish --stamp-key-id`) and carry a signed
+expiry (`publish --expires-in 7d`); a revoked key never verifies, an unknown one is refused,
+and an expired pointer is refused after its signature checks out. The `sequence` rollback
+floor holds across keys.
+
+```bash
+uv run edgeproc keyring init keys/public.key new-keys/public.key --out keyring.json
+uv run edgeproc keyring revoke keyring.json <old-key-id>   # after the publisher switched
+uv run edgeproc keyring show keyring.json --pretty
+```
+
+Both stamps are **off by default**, because a consumer older than the keyring release refuses
+a pointer carrying them: upgrade every consumer first, then turn stamping on. The overlap
+procedure, the compromised-key path, and the re-sign cadence are in the
+[operations runbook](docs/OPERATIONS.md#key-rotation-and-compromised-key-runbook).
+
 Chunking is content-defined (GearCDC) and chunks are zstd-compressed. Add `--http` to `sync`,
 serving `origin/` over any static HTTP server or CDN, to go over the wire instead of the
 filesystem; the contract is identical and only the transport changes.
@@ -484,9 +508,11 @@ ecosystem-standard `HF_TOKEN`):
 | `max_sync_total_bytes` | `EDGEPROC_MAX_SYNC_TOTAL_BYTES` | `4 GiB` | Aggregate bytes one `sync` will pull before refusing — disk-exhaustion defense against a runaway manifest. |
 | `max_sync_files` | `EDGEPROC_MAX_SYNC_FILES` | `100000` | Aggregate file count one `sync` will pull before refusing, for the same reason. |
 | `rrf_k_window` | `EDGEPROC_RRF_K_WINDOW` | `60` | RRF rank-window constant for hybrid fusion. |
-| `trust_root_pubkey_path` | `EDGEPROC_TRUST_ROOT_PUBKEY_PATH` | `None` | Pinned sync trust-root pubkey (no key ⇒ `sync` refused). |
+| `trust_root_pubkey_path` | `EDGEPROC_TRUST_ROOT_PUBKEY_PATH` | `None` | Pinned sync trust root: a raw `public.key` or a JSON keyring (none ⇒ `sync` refused). |
+| `publish_stamp_key_id` | `EDGEPROC_PUBLISH_STAMP_KEY_ID` | `False` | Sign the signing key's `key_id` into published pointers. Upgrade every consumer first. |
+| `publish_expires_in` | `EDGEPROC_PUBLISH_EXPIRES_IN` | `None` | Sign `expires_at = now + duration` (seconds, or `90s`/`30m`/`12h`/`7d`/`2w`) into published pointers. Upgrade every consumer first. |
 
-That is the complete set — all 19 fields of `EdgeProcSettings`. A test asserts this table
+That is the complete set — all 21 fields of `EdgeProcSettings`. A test asserts this table
 matches the settings object field-for-field, so a new setting cannot ship undocumented.
 
 One more environment variable exists that is deliberately **not** an `EdgeProcSettings`

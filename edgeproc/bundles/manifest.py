@@ -11,9 +11,18 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from typing import Annotated, Final
+from typing import Annotated, Any, Final
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+)
 
 from edgeproc.bundles.containment import ensure_safe_relpath
 
@@ -30,6 +39,42 @@ def validate_sha256_hex(value: str) -> str:
 
 
 type Sha256Hex = Annotated[str, AfterValidator(validate_sha256_hex)]
+
+_KEY_ID_PATTERN: Final = re.compile(r"[0-9a-f]{16}")
+#: Largest integer every JSON runtime represents exactly (``Number.MAX_SAFE_INTEGER`` + 1).
+#: A signed integer field must round-trip identically through a browser consumer.
+JSON_SAFE_INTEGER_LIMIT: Final = 2**53
+
+
+def validate_key_id(value: str) -> str:
+    """Return a canonical ``key_id`` (16 lowercase hex) or reject it at the trust boundary."""
+    if _KEY_ID_PATTERN.fullmatch(value) is None:
+        raise ValueError("invalid key_id: expected 16 lowercase hexadecimal characters")
+    return value
+
+
+type KeyId = Annotated[str, AfterValidator(validate_key_id)]
+
+
+def _integral_number(value: object) -> object:
+    """Read an integral JSON number (``1767225600.0``) as the integer it is.
+
+    ``JSON.parse`` cannot tell ``1767225600.0`` from ``1767225600``, so the browser runtime
+    accepts both; Python must accept the same pointers. A fractional, infinite, or NaN
+    float passes through unchanged and the strict integer check refuses it.
+    """
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
+#: Unix seconds: an integer 0 < v < 2**53. ``strict`` refuses a bool, a numeric string, and
+#: a fractional number, and the signing preimage always spells the value as an integer.
+type UnixSeconds = Annotated[
+    int,
+    BeforeValidator(_integral_number),
+    Field(strict=True, gt=0, lt=JSON_SAFE_INTEGER_LIMIT),
+]
 
 
 class ChunkRef(BaseModel):
@@ -79,10 +124,17 @@ class VersionPointer(BaseModel):
     """Signed pointer to a manifest; ``signature`` is detached over the rest.
 
     ``bundle_id``/``channel`` optionally BIND the signature to a bundle identity and
-    release channel; ``sequence`` is an optional monotonic freshness counter. All three
-    default ``None`` and are excluded from the signed preimage when unset (see
+    release channel; ``sequence`` is an optional monotonic freshness counter. ``key_id``
+    names the trust-root key that signed the pointer (so a keyring consumer selects it,
+    refuses it when revoked, and fails closed when it is unknown), and ``expires_at`` is
+    the Unix second from which a consumer refuses the pointer. All five default ``None``
+    and are excluded from the signed preimage when unset (see
     :func:`pointer_signing_bytes`), so an already-signed legacy pointer — which carries
     none of them — verifies byte-for-byte and existing verification is unchanged.
+
+    ``key_id``/``expires_at`` are also left OUT of the serialized pointer when unset (see
+    :meth:`_omit_unset_keyring_fields`): an older consumer's model forbids unknown keys, so
+    a publisher that does not stamp them writes the exact pre-keyring ``latest`` bytes.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -92,13 +144,33 @@ class VersionPointer(BaseModel):
     bundle_id: str | None = None  # identity binding (optional; None ⇒ legacy preimage)
     channel: str | None = None  # release-channel binding (optional)
     sequence: int | None = Field(default=None, ge=0)  # monotonic freshness counter (optional)
+    key_id: KeyId | None = None  # signing key's id in the consumer's keyring (optional)
+    expires_at: UnixSeconds | None = None  # refused at/after this Unix second (optional)
     signature: str  # ed25519 over pointer_signing_bytes(self)
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_keyring_fields(self, handler: SerializerFunctionWrapHandler) -> Any:
+        """Drop an unset ``key_id``/``expires_at`` so the legacy wire bytes never change.
+
+        The older fields keep serializing ``null`` exactly as they always have; only the
+        keyring fields — which an older consumer would reject even as ``null`` — vanish.
+        """
+        data = handler(self)
+        for name in _KEYRING_FIELDS:
+            if name in data and data[name] is None:
+                del data[name]
+        return data
+
+
+#: Fields introduced with the trust-root keyring. Unset, they are absent from BOTH the
+#: signing preimage and the serialized pointer.
+_KEYRING_FIELDS: Final = ("key_id", "expires_at")
 
 
 # Identity/freshness fields added after v0. They are excluded from the signing preimage
 # whenever they are unset, so a pointer carrying none of them hashes IDENTICALLY to the
 # legacy {manifest_hash, version} bytes — every already-signed pointer still verifies.
-_POINTER_OPTIONAL_FIELDS: Final = ("bundle_id", "channel", "sequence")
+_POINTER_OPTIONAL_FIELDS: Final = ("bundle_id", "channel", "sequence", *_KEYRING_FIELDS)
 
 
 def pointer_signing_bytes(pointer: VersionPointer) -> bytes:
@@ -111,6 +183,16 @@ def pointer_signing_bytes(pointer: VersionPointer) -> bytes:
     exclude = {"signature"}
     exclude.update(f for f in _POINTER_OPTIONAL_FIELDS if getattr(pointer, f) is None)
     return canonical_bytes(pointer, exclude=exclude)
+
+
+def is_expired(pointer: VersionPointer, now: float) -> bool:
+    """True when ``pointer`` carries an ``expires_at`` and ``now`` has reached it.
+
+    Inclusive: at ``now == expires_at`` the pointer is already expired. A pointer with no
+    ``expires_at`` never expires (the pre-keyring behavior). Only meaningful AFTER the
+    signature verified — an unsigned expiry must never decide anything.
+    """
+    return pointer.expires_at is not None and now >= pointer.expires_at
 
 
 def is_fresh_sequence(incoming: VersionPointer, active: VersionPointer) -> bool:

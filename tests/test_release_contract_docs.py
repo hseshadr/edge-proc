@@ -317,11 +317,14 @@ def _registered_cli_commands() -> set[str]:
     """Command names Typer exposes to a real ``edgeproc --help`` consumer."""
     from edgeproc.cli import app  # noqa: PLC0415
 
-    return {
+    commands = {
         command.name or command.callback.__name__.replace("_", "-")
         for command in app.registered_commands
         if command.callback is not None
     }
+    # A sub-app (`edgeproc keyring ...`) is a top-level command to a consumer, too.
+    groups = {group.name for group in app.registered_groups if group.name is not None}
+    return commands | groups
 
 
 def _documented_cli_commands() -> set[str]:
@@ -378,15 +381,31 @@ def test_release_runbook_keeps_build_code_outside_the_oidc_job() -> None:
 
 
 def test_operations_contract_has_an_honest_key_rotation_runbook() -> None:
-    """Rotation is documented as it is today; the keyring is labeled roadmap, never shipped."""
+    """The runbook documents the SHIPPED keyring — and its limits — never more than that."""
     operations = _read("docs/OPERATIONS.md")
     assert "## Key rotation and compromised-key runbook" in operations
     runbook = operations.split("## Key rotation and compromised-key runbook", 1)[1]
     runbook = runbook.split("\n## ", 1)[0]
-    for fact in ("single pinned", "sequence", "no revocation list", "expiry", "ROADMAP.md"):
-        assert fact in runbook
+    for fact in (
+        "### Upgrade order: consumers first, then stamping",
+        "### Planned rotation (overlap window)",
+        "### Compromised signing key",
+        "### Expiry and the re-sign cadence",
+        "edgeproc keyring revoke",
+        "strictly greater `sequence`",
+        "off by default",
+        # The honest limits: revocation is local config; expiry does not answer compromise.
+        "there is no remotely fetched",
+        "Expiry bounds a freeze, not a compromise.",
+    ):
+        assert fact in runbook, fact
     assert "docs/OPERATIONS.md#key-rotation-and-compromised-key-runbook" in _read("SECURITY.md")
+
+
+def test_roadmap_lists_the_keyring_as_shipped_and_nothing_it_did_not_ship() -> None:
     roadmap = _read("ROADMAP.md")
-    assert "Trust-root keyring" in roadmap
-    keyring = roadmap.split("Trust-root keyring", 1)[1].split("\n\n", 1)[0]
-    assert "not built" in keyring
+    shipped = roadmap.split("## Shipped on `main` (unreleased)", 1)[1].split("\n## ", 1)[0]
+    assert "Trust-root keyring" in shipped
+    assert "no remotely fetched, signed revocation" in shipped
+    near_term = roadmap.split("## Near-term", 1)[1].split("\n## ", 1)[0]
+    assert "keyring" not in near_term.lower()

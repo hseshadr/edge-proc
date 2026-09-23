@@ -1,9 +1,9 @@
 """EdgeProc command-line interface.
 
 Commands report the version, show which optional runtime extras are installed,
-sync + verify a bundle, and ``route`` a Task through a ``LocalVecRuntime`` loaded
-from a persisted index directory (the runtime wiring the empty-registry default
-can't do on its own).
+mint keys and manage a trust-root keyring, publish and sync + verify a bundle, and
+``route`` a Task through a ``LocalVecRuntime`` loaded from a persisted index directory
+(the runtime wiring the empty-registry default can't do on its own).
 """
 
 from __future__ import annotations
@@ -13,6 +13,8 @@ import errno
 import importlib
 import json
 import os
+import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Final, NoReturn
 
@@ -37,15 +39,12 @@ from edgeproc.errors import (
 if TYPE_CHECKING:
     from edgeproc.bundles.adapters import FetchAdapter
     from edgeproc.bundles.cas import CacheStore
+    from edgeproc.bundles.keyring import Keyring
     from edgeproc.bundles.manifest import IndexManifest, VersionPointer
-    from edgeproc.bundles.signing import (
-        Ed25519Signer,
-        Ed25519Verifier,
-        Signer,
-        Verifier,
-    )
+    from edgeproc.bundles.signing import Ed25519Signer, Verifier
     from edgeproc.bundles.sync import SyncResult
     from edgeproc.core.protocols import Runtime
+    from edgeproc.core.settings import EdgeProcSettings
     from edgeproc.localvec.encoder import Encoder
 
 #: Opt in to machine-readable refusals: ``EDGEPROC_ERROR_FORMAT=json`` makes every
@@ -67,7 +66,16 @@ _PATH_INPUT_ERRNOS: Final[frozenset[int]] = frozenset(
     }
 )
 
+_ED25519_PUBLIC_KEY_BYTES: Final = 32
+_PUBLIC_FILE_MODE: Final = 0o644
+_CREATE_NO_FOLLOW: Final = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+
 app = typer.Typer(help="EdgeProc — AI-native local execution substrate.", no_args_is_help=True)
+keyring_app = typer.Typer(
+    help="Manage a trust-root keyring: pin several keys, overlap a rotation, revoke a key.",
+    no_args_is_help=True,
+)
+app.add_typer(keyring_app, name="keyring")
 
 
 @app.command()
@@ -109,7 +117,10 @@ def sync(
     ),
     key: Annotated[
         Path | None,
-        typer.Option(help="Pinned ed25519 trust-root pubkey (else the env trust-root path)."),
+        typer.Option(
+            help="Pinned trust root: raw ed25519 public.key or a JSON keyring "
+            "(else the env trust-root path)."
+        ),
     ] = None,
     materialize_to: Annotated[
         Path | None,
@@ -136,10 +147,9 @@ def sync(
         # `[bundles]` extra, not the core dependency set (hence the per-line PLC0415).
         from edgeproc.bundles.adapters import FilesystemAdapter, HttpAdapter  # noqa: PLC0415
         from edgeproc.bundles.cas import FilesystemCacheStore  # noqa: PLC0415
-        from edgeproc.bundles.signing import Ed25519Verifier  # noqa: PLC0415
     except ImportError:  # pragma: no cover - exercised only without the [bundles] extra
         _fail("install edge-proc[bundles] to use sync")
-    verifier = _load_verifier(key, Ed25519Verifier)
+    verifier = _load_verifier(key)
     store = FilesystemCacheStore(cache_dir)
     adapter = HttpAdapter() if http else FilesystemAdapter()
     result = _run_sync(
@@ -172,14 +182,31 @@ def publish(
     bind_identity: Annotated[
         bool, typer.Option(help="Bind bundle_id into the signed pointer (opt-in identity pin).")
     ] = False,
+    stamp_key_id: Annotated[
+        bool | None,
+        typer.Option(
+            "--stamp-key-id/--no-stamp-key-id",
+            help="Sign the key's key_id into the pointer (default: EDGEPROC_PUBLISH_STAMP_KEY_ID"
+            ", off). Upgrade every consumer first.",
+        ),
+    ] = None,
+    expires_in: Annotated[
+        str | None,
+        typer.Option(
+            help="Sign expires_at = now + this: seconds or 90s/30m/12h/7d/2w (default: "
+            "EDGEPROC_PUBLISH_EXPIRES_IN, none). Upgrade every consumer first.",
+        ),
+    ] = None,
     pretty: Annotated[bool, typer.Option(help="Print a human summary instead of JSON.")] = False,
 ) -> None:
     """Chunk + sign every file under ``--src`` into a content-addressed origin dir.
 
     The counterpart to ``sync``: produces the ``/latest`` + ``/manifest`` + ``/chunk``
-    an ``edgeproc sync`` consumes. ``--bind-identity``/``--channel``/``--sequence`` are
-    opt-in: without them the signed pointer is byte-identical to the legacy format. A
-    missing/invalid key or src fails closed (exit 1, no traceback); exit 0 on success.
+    an ``edgeproc sync`` consumes. ``--bind-identity``/``--channel``/``--sequence``/
+    ``--stamp-key-id``/``--expires-in`` are opt-in: without them the signed pointer is
+    byte-identical to the legacy format. A consumer older than the keyring release refuses a
+    pointer carrying ``key_id``/``expires_at``, so upgrade consumers before stamping. A
+    missing/invalid key, src, or expiry fails closed (exit 1, no traceback); exit 0 on success.
     """
     try:
         # Lazy: the bundles substrate is an optional extra, not a core dependency.
@@ -190,6 +217,7 @@ def publish(
     except ImportError:  # pragma: no cover - exercised only without the [bundles] extra
         _fail("install edge-proc[bundles] to use publish")
     signer = _load_signer(key, Ed25519Signer)
+    stamped_key_id, expires_at = _pointer_stamps(signer, stamp_key_id, expires_in)
     pointer = build_bundle(
         files=_read_src(src),
         store=FilesystemCacheStore(origin_dir),
@@ -200,8 +228,49 @@ def publish(
         channel=channel,
         sequence=sequence,
         bind_identity=bind_identity,
+        key_id=stamped_key_id,
+        expires_at=expires_at,
     )
     typer.echo(_render_pointer(pointer, pretty=pretty))
+
+
+def _now() -> int:
+    """Wall-clock Unix seconds for ``--expires-in``. A seam: tests pin it."""
+    return int(time.time())
+
+
+def _pointer_stamps(
+    signer: Ed25519Signer, stamp_key_id: bool | None, expires_in: str | None
+) -> tuple[str | None, int | None]:
+    """Resolve the opt-in ``key_id``/``expires_at`` stamps: a flag wins, else the setting."""
+    settings = _publish_settings()
+    stamp = settings.publish_stamp_key_id if stamp_key_id is None else stamp_key_id
+    lifetime = settings.publish_expires_in if expires_in is None else _parse_expires_in(expires_in)
+    return (signer.key_id if stamp else None), _expires_at(lifetime)
+
+
+def _expires_at(lifetime: int | None) -> int | None:
+    return None if lifetime is None else _now() + lifetime
+
+
+def _parse_expires_in(text: str) -> int:
+    from edgeproc.core.settings import parse_duration  # noqa: PLC0415
+
+    try:
+        return parse_duration(text)
+    except ValueError as exc:
+        _fail(str(exc), CONFIG_INVALID, field="--expires-in")
+
+
+def _publish_settings() -> EdgeProcSettings:
+    """Read the stamping defaults; a malformed ``EDGEPROC_`` value is a coded refusal."""
+    from edgeproc.core.settings import EdgeProcSettings  # noqa: PLC0415
+
+    try:
+        return EdgeProcSettings()
+    except ValidationError as exc:
+        field = f"EDGEPROC_{str(exc.errors()[0]['loc'][0]).upper()}"
+        _fail(f"invalid setting {field}: {exc.errors()[0]['msg']}", CONFIG_INVALID, field=field)
 
 
 @app.command()
@@ -240,7 +309,7 @@ def keygen(
     out: Annotated[Path, typer.Option(help="Dir to write private.key + public.key (raw ed25519).")],
 ) -> None:
     """Write a raw ed25519 keypair (``private.key`` + ``public.key``) into ``--out``."""
-    from edgeproc.bundles.signing import generate_keypair  # noqa: PLC0415
+    from edgeproc.bundles.signing import generate_keypair, key_id_for  # noqa: PLC0415
 
     private, public = generate_keypair()
     try:
@@ -250,6 +319,7 @@ def keygen(
     except OSError as exc:  # e.g. a pre-planted symlink at a key path (O_NOFOLLOW → ELOOP)
         _fail(f"could not write key files under {out}: {exc}")
     typer.echo(f"wrote {out / 'private.key'} and {out / 'public.key'}")
+    typer.echo(f"key_id {key_id_for(public.public_bytes_raw())}")
 
 
 def _prepare_key_directory(path: Path) -> None:
@@ -281,6 +351,158 @@ def _write_no_follow(path: Path, data: bytes, mode: int) -> None:
     fd = os.open(path, flags, mode)
     with os.fdopen(fd, "wb") as handle:
         handle.write(data)
+
+
+@keyring_app.command("init")
+def keyring_init(
+    public_keys: Annotated[
+        list[Path], typer.Argument(help="Raw ed25519 public.key files to trust (from keygen).")
+    ],
+    out: Annotated[Path, typer.Option(help="Keyring file to create; never overwritten.")],
+) -> None:
+    """Create a JSON keyring (``edgeproc.keyring/v1``) trusting each public key."""
+    from edgeproc.bundles.keyring import keyring_of  # noqa: PLC0415
+
+    raws = [_read_public_key(path) for path in public_keys]
+    ring = _valid_keyring(lambda: keyring_of(raws))
+    _create_keyring(out, ring)
+    typer.echo(f"wrote {out} trusting {len(ring.keys)} key(s)")
+
+
+@keyring_app.command("add")
+def keyring_add(
+    keyring: Annotated[Path, typer.Argument(help="JSON keyring to edit in place.")],
+    public_key: Annotated[Path, typer.Argument(help="Raw ed25519 public.key to trust.")],
+) -> None:
+    """Trust one more key (the rotation overlap window). A revoked key is never re-added."""
+    from edgeproc.bundles.keyring import add_key  # noqa: PLC0415
+    from edgeproc.bundles.signing import key_id_for  # noqa: PLC0415
+
+    ring = _read_keyring_for_edit(keyring)
+    raw = _read_public_key(public_key)
+    _replace_keyring(keyring, _valid_keyring(lambda: add_key(ring, raw)))
+    typer.echo(f"added key_id {key_id_for(raw)} to {keyring}")
+
+
+@keyring_app.command("revoke")
+def keyring_revoke(
+    keyring: Annotated[Path, typer.Argument(help="JSON keyring to edit in place.")],
+    key_id: Annotated[str, typer.Argument(help="16-hex key_id to revoke (idempotent).")],
+) -> None:
+    """Revoke a key: its signatures never verify again, at any sequence."""
+    from edgeproc.bundles.keyring import revoke_key  # noqa: PLC0415
+
+    ring = _read_keyring_for_edit(keyring)
+    updated = _valid_keyring(lambda: revoke_key(ring, key_id))
+    if updated != ring:
+        _replace_keyring(keyring, updated)
+    typer.echo(f"revoked key_id {key_id} in {keyring}")
+
+
+@keyring_app.command("show")
+def keyring_show(
+    keyring: Annotated[Path, typer.Argument(help="JSON keyring or raw public.key to show.")],
+    pretty: Annotated[bool, typer.Option(help="One line per key instead of JSON.")] = False,
+) -> None:
+    """Print a trust root deterministically: every key_id and whether it is revoked."""
+    from edgeproc.bundles.keyring import load_trust_root  # noqa: PLC0415
+
+    raw = _read_input(keyring, "keyring")
+    ring = _valid_keyring(lambda: load_trust_root(raw))
+    typer.echo(_render_keyring(ring) if not pretty else _render_keyring_lines(ring))
+
+
+def _valid_keyring(build: Callable[[], Keyring]) -> Keyring:
+    """Run a keyring constructor, turning any refusal into a coded ``config.invalid``."""
+    try:
+        return build()
+    except ValueError as exc:
+        _fail(f"invalid keyring: {exc}", CONFIG_INVALID, field="keyring")
+
+
+def _read_input(path: Path, label: str) -> bytes:
+    try:
+        return path.read_bytes()
+    except OSError as exc:
+        _fail(f"could not read {label} {path}: {exc}", CONFIG_MISSING, field=label)
+
+
+def _read_public_key(path: Path) -> bytes:
+    raw = _read_input(path, "public key")
+    if len(raw) != _ED25519_PUBLIC_KEY_BYTES:
+        _fail(f"malformed public key {path}: expected raw 32 bytes", CONFIG_INVALID, field="key")
+    return raw
+
+
+def _read_keyring_for_edit(path: Path) -> Keyring:
+    """Read a JSON keyring to edit. A symlink or a raw ``public.key`` is refused, not rewritten."""
+    from edgeproc.bundles.keyring import parse_keyring  # noqa: PLC0415
+
+    if path.is_symlink():
+        _fail(f"refusing to edit a symlinked keyring: {path}", CONFIG_INVALID, field="keyring")
+    raw = _read_input(path, "keyring")
+    return _valid_keyring(lambda: parse_keyring(raw))
+
+
+def _create_keyring(path: Path, ring: Keyring) -> None:
+    """Create ``path`` exclusively (``O_EXCL|O_NOFOLLOW``): never clobber, never follow."""
+    from edgeproc.bundles.keyring import keyring_bytes  # noqa: PLC0415
+
+    try:
+        fd = os.open(path, _CREATE_NO_FOLLOW, _PUBLIC_FILE_MODE)
+    except FileExistsError:
+        _fail(f"refusing to overwrite existing {path}", CONFIG_INVALID, field="--out")
+    except OSError as exc:
+        _fail(f"could not write keyring {path}: {exc}", _path_input_code(exc), field="--out")
+    _write_public_fd(fd, keyring_bytes(ring))
+
+
+def _replace_keyring(path: Path, ring: Keyring) -> None:
+    """Atomically replace ``path``: write a private temp sibling, fsync, then ``os.replace``."""
+    from edgeproc.bundles.keyring import keyring_bytes  # noqa: PLC0415
+
+    temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        fd = os.open(temp, _CREATE_NO_FOLLOW, _PUBLIC_FILE_MODE)
+    except OSError as exc:
+        _fail(f"could not write keyring {path}: {exc}", _path_input_code(exc), field="keyring")
+    try:
+        _write_public_fd(fd, keyring_bytes(ring))
+        os.replace(temp, path)
+    except OSError as exc:
+        temp.unlink(missing_ok=True)
+        _fail(f"could not write keyring {path}: {exc}", _path_input_code(exc), field="keyring")
+
+
+def _write_public_fd(fd: int, data: bytes) -> None:
+    """Write a public (non-secret) file: mode 0644 regardless of umask, flushed to disk."""
+    os.fchmod(fd, _PUBLIC_FILE_MODE)
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _render_keyring(ring: Keyring) -> str:
+    keys = [
+        {
+            "key_id": entry.key_id,
+            "public_key": entry.public_key,
+            "status": "revoked" if ring.is_revoked(entry.key_id) else "active",
+        }
+        for entry in sorted(ring.keys, key=lambda e: e.key_id)
+    ]
+    doc = {"schema": ring.schema_id, "keys": keys, "revoked": sorted(ring.revoked)}
+    return json.dumps(doc, indent=2, sort_keys=True)
+
+
+def _render_keyring_lines(ring: Keyring) -> str:
+    held = {entry.key_id for entry in ring.keys}
+    lines = [
+        f"{key_id}  {'revoked' if ring.is_revoked(key_id) else 'active'}" for key_id in sorted(held)
+    ]
+    lines += [f"{key_id}  revoked (no public key)" for key_id in sorted(set(ring.revoked) - held)]
+    return "\n".join(lines)
 
 
 @app.command()
@@ -434,21 +656,25 @@ def _resolve_trust_key(key: Path | None) -> Path:
     return resolved
 
 
-def _load_verifier(key: Path | None, verifier_cls: type[Ed25519Verifier]) -> Verifier:
-    """Load the pinned ed25519 trust-root pubkey into a ``Verifier``; fail closed if it can't.
+def _load_verifier(key: Path | None) -> Verifier:
+    """Load the pinned trust root into a keyring ``Verifier``; fail closed if it can't.
 
-    Mirrors ``_load_signer``: a missing/unreadable key FILE (OSError) and a present-but-malformed
-    key (ValueError from ``from_public_bytes`` — wrong length / bad bytes) each fail closed with a
-    distinct, actionable message rather than leaking a traceback. No trust root AT ALL is already
-    refused upstream by ``_resolve_trust_key``, so the sync still never runs unverified.
+    The trust root is a legacy raw 32-byte ``public.key`` (a keyring of one, verifying exactly
+    as the single pinned key always did) or a JSON keyring. Mirrors ``_load_signer``: a
+    missing/unreadable FILE (OSError) and a present-but-malformed root (ValueError — wrong
+    length, bad bytes, an invalid keyring) each fail closed with a distinct, actionable
+    message rather than leaking a traceback. No trust root AT ALL is already refused upstream
+    by ``_resolve_trust_key``, so the sync still never runs unverified.
     """
+    from edgeproc.bundles.keyring import KeyringVerifier, load_trust_root  # noqa: PLC0415
+
     path = _resolve_trust_key(key)
     try:
         raw = path.read_bytes()
     except OSError as exc:
         _fail(f"could not read trust-root key {path}: {exc}", CONFIG_MISSING, field="--key")
     try:
-        return verifier_cls.from_public_bytes(raw)
+        return KeyringVerifier(load_trust_root(raw))
     except ValueError as exc:
         _fail(f"malformed trust-root key {path}: {exc}", CONFIG_INVALID, field="--key")
 
@@ -527,7 +753,7 @@ def _render_sync(result: SyncResult, *, pretty: bool) -> str:
     return result.model_dump_json(indent=2)
 
 
-def _load_signer(key: Path, signer_cls: type[Ed25519Signer]) -> Signer:
+def _load_signer(key: Path, signer_cls: type[Ed25519Signer]) -> Ed25519Signer:
     """Load a raw ed25519 private key into a ``Signer``; fail closed if it can't.
 
     Two distinct, actionable failures: a missing/unreadable key FILE (OSError) vs a
