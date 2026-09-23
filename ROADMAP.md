@@ -5,7 +5,7 @@ direction. It's grounded in the [README](README.md) and [CHANGELOG](CHANGELOG.md
 marked *roadmap* are kept as Protocol seams, not yet built. Nothing here is a promise of a
 date.
 
-## Shipped (v0.4.1)
+## Shipped (v0.5.0)
 
 - **Deterministic router** over pluggable runtimes — no LLM in the routing path.
 - **LocalVec runtime** (`[localvec]`): FAISS-backed `EMBED` / `SEARCH` / `RANK` with hybrid
@@ -17,9 +17,6 @@ date.
   pinned trust-root pubkey.
 - **PyPI distribution** (`edge-proc`): wheels and source archives published through GitHub
   OIDC with PEP 740 provenance.
-
-## Shipped on `main` (unreleased)
-
 - **Trust-root keyring: `key_id`, revocation, and pointer expiry.** A consumer pins a raw
   `public.key` (a keyring of one, unchanged behavior) or a JSON keyring of 1–64 keys with a
   revocation list. A signed pointer may name its signing `key_id` (selected; unknown or

@@ -35,8 +35,8 @@ issue is already fixed.
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.4.1   | :white_check_mark: |
-| < 0.4.1 | :x:                |
+| 0.5.0   | :white_check_mark: |
+| < 0.5.0 | :x:                |
 
 ## Scope notes
 

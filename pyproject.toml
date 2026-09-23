@@ -23,7 +23,7 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.5",
     "typer>=0.26.8",
-    "edgeproc-core>=0.4.2",  # supported core line; earlier releases are superseded
+    "edgeproc-core>=0.4.3",  # supported core line; earlier releases are superseded
 ]
 
 [project.optional-dependencies]
