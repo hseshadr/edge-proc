@@ -34,7 +34,7 @@ OSV_AUDIT_COMMAND: Final = (
     "tool",
     "run",
     "--from",
-    "pip-audit==2.10.0",
+    "pip-audit==2.10.1",
     "pip-audit",
     "-r",
     "/work/requirements.txt",
