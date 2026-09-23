@@ -375,3 +375,18 @@ def test_release_runbook_keeps_build_code_outside_the_oidc_job() -> None:
         "OIDC-bearing job only invokes pinned artifact download and official PyPI publish"
         in release
     )
+
+
+def test_operations_contract_has_an_honest_key_rotation_runbook() -> None:
+    """Rotation is documented as it is today; the keyring is labeled roadmap, never shipped."""
+    operations = _read("docs/OPERATIONS.md")
+    assert "## Key rotation and compromised-key runbook" in operations
+    runbook = operations.split("## Key rotation and compromised-key runbook", 1)[1]
+    runbook = runbook.split("\n## ", 1)[0]
+    for fact in ("single pinned", "sequence", "no revocation list", "expiry", "ROADMAP.md"):
+        assert fact in runbook
+    assert "docs/OPERATIONS.md#key-rotation-and-compromised-key-runbook" in _read("SECURITY.md")
+    roadmap = _read("ROADMAP.md")
+    assert "Trust-root keyring" in roadmap
+    keyring = roadmap.split("Trust-root keyring", 1)[1].split("\n\n", 1)[0]
+    assert "not built" in keyring
