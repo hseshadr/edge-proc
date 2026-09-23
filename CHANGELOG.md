@@ -62,6 +62,11 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
 - `edgeproc publish` now reads `EdgeProcSettings` for its stamping defaults, so a malformed
   `EDGEPROC_*` value in the environment is refused as `config.invalid` instead of being
   ignored by `publish` (as `sync` already did).
+- The README follows the portfolio template: a plain-language first screen, a runnable
+  offline example with its real output, and an "At a glance" summary. The package
+  description is now that tagline, and the classifier is `Development Status :: 4 - Beta`.
+  `tests/test_readme_contract.py` pins the first screen, and the source archive now ships
+  the files the README links to (`CONTRIBUTING.md`, `.github/ISSUE_TEMPLATE/`).
 
 ## [0.4.1] — 2026-08-13
 

@@ -29,7 +29,7 @@ notes unless you prefer to remain anonymous.
 
 ## Supported versions
 
-EdgeProc is pre-1.0 (alpha). Security fixes land on `main` and ship in the next release. We
+EdgeProc is pre-1.0 (beta). Security fixes land on `main` and ship in the next release. We
 support the **latest released version**; please upgrade to it before reporting, in case the
 issue is already fixed.
 

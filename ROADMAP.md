@@ -1,6 +1,6 @@
 # Roadmap
 
-EdgeProc is pre-1.0 (alpha). This roadmap reflects what's shipped today and the near-term
+EdgeProc is pre-1.0 (beta). This roadmap reflects what's shipped today and the near-term
 direction. It's grounded in the [README](README.md) and [CHANGELOG](CHANGELOG.md) — items
 marked *roadmap* are kept as Protocol seams, not yet built. Nothing here is a promise of a
 date.
