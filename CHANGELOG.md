@@ -4,6 +4,20 @@ All notable changes to **edge-proc**. Newest first; we follow [SemVer](https://s
 
 ## [Unreleased]
 
+### Changed
+
+- **The release candidate is back to the fleet's shell-free shape: checkout, Dagger,
+  upload.** The central `hseshadr/ci` fleet policy forbids `run:` steps and reported
+  `shell-step` and `candidate-order` on `release-candidate.yml`. The 0.5.0 hardening kept
+  the dispatched tag out of script text by moving the call into `run:` steps. It now stays
+  out of script text inside the pinned `dagger/dagger-for-github` step instead: the tag
+  reaches it only as the `TAG` environment variable, and `args` hold only double-quoted
+  variables (`--tag="$TAG" --commit-sha="$GITHUB_SHA"`), so bash expands the tag as one
+  inert word. The separate `vX.Y.Z` shell guard is gone. Dagger already rejects any tag
+  that differs from the metadata-derived release tag. `tests/test_workflow_security.py`
+  now expands the real `args` in bash with hostile tags and asserts that each one arrives as
+  a single literal argument and runs nothing.
+
 ## [0.5.0] — 2026-09-23
 
 This minor release adds a trust-root keyring, so a publisher can rotate or revoke its
